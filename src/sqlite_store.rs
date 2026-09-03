@@ -44,12 +44,8 @@ fn bytes_to_f32s(b: &[u8]) -> Option<Vec<f32>> {
     if !b.len().is_multiple_of(4) {
         return None;
     }
-    let mut out = Vec::with_capacity(b.len() / 4);
-    for chunk in b.chunks_exact(4) {
-        let arr: [u8; 4] = chunk.try_into().ok()?;
-        out.push(f32::from_le_bytes(arr));
-    }
-    Some(out)
+    let (chunks, _rem) = b.as_chunks::<4>();
+    Some(chunks.iter().map(|c| f32::from_le_bytes(*c)).collect())
 }
 
 fn scope_str(s: Scope) -> &'static str {
