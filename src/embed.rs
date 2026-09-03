@@ -9,12 +9,20 @@
 //! 高级用户可实现 [`Embedder`] trait 换成真实语义模型（如 OpenAI / BGE / 本地 ONNX 等），
 //! 替换后检索的向量混合部分会直接受益。
 
+use crate::store::StoreResult;
 use crate::text::tokenize;
 
 /// 嵌入器抽象：任何把文本变成固定维度向量的实现。
+///
+/// 返回 [`StoreResult`]：本地哈希嵌入器永不失败，但网络嵌入器（OpenAI / 自建服务）
+/// 可能因网络或鉴权失败，因此 trait 统一为可失败签名。
 pub trait Embedder: Send + Sync {
     /// 返回文本的（已归一化）向量。
-    fn embed(&self, text: &str) -> Vec<f32>;
+    fn embed(&self, text: &str) -> StoreResult<Vec<f32>>;
+    /// 批量嵌入；默认逐个调用，网络后端可覆盖为一次请求。
+    fn embed_batch(&self, texts: &[String]) -> StoreResult<Vec<Vec<f32>>> {
+        texts.iter().map(|t| self.embed(t)).collect()
+    }
     /// 向量维度。
     fn dim(&self) -> usize;
 }
@@ -37,7 +45,7 @@ impl HashEmbedder {
 }
 
 impl Embedder for HashEmbedder {
-    fn embed(&self, text: &str) -> Vec<f32> {
+    fn embed(&self, text: &str) -> StoreResult<Vec<f32>> {
         let mut vec = vec![0.0f32; self.dim];
         let tokens = tokenize(text);
 
@@ -53,7 +61,7 @@ impl Embedder for HashEmbedder {
         }
 
         l2_normalize(&mut vec);
-        vec
+        Ok(vec)
     }
 
     fn dim(&self) -> usize {
@@ -83,7 +91,7 @@ pub fn l2_normalize(v: &mut [f32]) {
 
 /// 余弦相似度（要求两个等长向量；归一化向量点积即余弦）。
 ///
-/// 返回值被 clamp 到 [0,1]，用于相关度与去重阈值比较。
+/// 返回值被 clamp 到 \[0,1\]，用于相关度与去重阈值比较。
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
@@ -99,32 +107,35 @@ mod tests {
     #[test]
     fn similar_sentences_higher_than_dissimilar() {
         let e = HashEmbedder::new(512);
-        let a = e.embed("用户喜欢用 Rust 写 Agent");
-        let b = e.embed("用户喜欢用 Rust 写 Agent 应用");
-        let c = e.embed("今天天气很好，适合跑步");
+        let a = e.embed("用户喜欢用 Rust 写 Agent").unwrap();
+        let b = e.embed("用户喜欢用 Rust 写 Agent 应用").unwrap();
+        let c = e.embed("今天天气很好，适合跑步").unwrap();
         assert!(cosine(&a, &b) > cosine(&a, &c), "near should beat far");
     }
 
     #[test]
     fn english_similarity() {
         let e = HashEmbedder::new(512);
-        let a = e.embed("the cat sits on the mat");
-        let b = e.embed("a cat is sitting on the mat");
-        let c = e.embed("quantum physics equations");
+        let a = e.embed("the cat sits on the mat").unwrap();
+        let b = e.embed("a cat is sitting on the mat").unwrap();
+        let c = e.embed("quantum physics equations").unwrap();
         assert!(cosine(&a, &b) > cosine(&a, &c));
     }
 
     #[test]
     fn deterministic() {
         let e = HashEmbedder::new(256);
-        assert_eq!(e.embed("hello world"), e.embed("hello world"));
+        assert_eq!(
+            e.embed("hello world").unwrap(),
+            e.embed("hello world").unwrap()
+        );
         assert_eq!(e.dim(), 256);
     }
 
     #[test]
     fn normalization() {
         let e = HashEmbedder::new(128);
-        let v = e.embed("归一化测试 normalization test");
+        let v = e.embed("归一化测试 normalization test").unwrap();
         let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 1e-3);
     }

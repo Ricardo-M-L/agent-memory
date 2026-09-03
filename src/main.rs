@@ -19,6 +19,9 @@
 //!   graph path <from> <to> [depth]          查两实体间多跳路径（默认 3）
 //!   graph entities                          列出全部实体
 //!   graph edges [--all]                     列出有效边（--all 含已失效）
+//!   graph communities                       社区发现（弱连通分量）
+//!   graph merge <keep> <alias>              合并别名实体（实体消歧）
+//!   graph stats                             图谱统计摘要
 //!   demo                                    运行端到端演示
 //!   help                                    帮助
 //!
@@ -89,6 +92,9 @@ fn print_help() {
          \x20 graph path <from> <to> [depth]          查多跳路径（默认3跳）\n\
          \x20 graph entities                          列出全部实体\n\
          \x20 graph edges [--all]                     列出有效边（--all含失效）\n\
+         \x20 graph communities                       社区发现（弱连通分量）\n\
+         \x20 graph merge <keep> <alias>              合并别名实体（消歧）\n\
+         \x20 graph stats                             图谱统计摘要\n\
          \x20 demo                                    端到端演示\n\n\
          数据库: 环境变量 AGENT_MEMORY_DB 指定，默认 ./agent-memory.db"
     );
@@ -315,7 +321,9 @@ fn cmd_stats(mem: &AgentMemory, a: &[String]) -> ExitCode {
 fn cmd_graph(mem: &AgentMemory, a: &[String]) -> ExitCode {
     let sub = match a.first() {
         Some(s) => s.as_str(),
-        None => return fail("用法: graph <add|replace|neighbors|path|entities|edges> ..."),
+        None => return fail(
+            "用法: graph <add|replace|neighbors|path|entities|edges|communities|merge|stats> ...",
+        ),
     };
     match sub {
         "add" | "replace" => {
@@ -403,6 +411,37 @@ fn cmd_graph(mem: &AgentMemory, a: &[String]) -> ExitCode {
                 Err(e) => fail(&format!("读取边失败: {e}")),
             }
         }
+        "communities" => match mem.graph_communities() {
+            Ok(comms) => {
+                for (i, c) in comms.iter().enumerate() {
+                    println!("社区{} ({} 个实体): {}", i + 1, c.len(), c.join(", "));
+                }
+                ok()
+            }
+            Err(e) => fail(&format!("社区发现失败: {e}")),
+        },
+        "merge" => {
+            if a.len() < 3 {
+                return fail("用法: graph merge <保留实体> <被合并别名>");
+            }
+            match mem.merge_graph_entities(&a[1], &a[2]) {
+                Ok(n) => {
+                    println!("已把 '{}' 合并进 '{}'，受影响边 {n} 条", a[2], a[1]);
+                    ok()
+                }
+                Err(e) => fail(&format!("实体合并失败: {e}")),
+            }
+        }
+        "stats" => match mem.graph_summary() {
+            Ok(s) => {
+                println!(
+                    "实体 {} | 有效边 {} | 失效边 {} | 社区 {} | 最大社区 {}",
+                    s.entities, s.valid_edges, s.invalid_edges, s.communities, s.largest_community
+                );
+                ok()
+            }
+            Err(e) => fail(&format!("统计失败: {e}")),
+        },
         other => fail(&format!("未知 graph 子命令: {other}")),
     }
 }

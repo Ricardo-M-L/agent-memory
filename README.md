@@ -2,6 +2,12 @@
 
 > 离线优先、零配置的 LLM Agent 记忆层（Rust 实现）
 
+[![CI](https://github.com/Ricardo-M-L/agent-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/Ricardo-M-L/agent-memory/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/agent-memory.svg)](https://crates.io/crates/agent-memory)
+[![Docs](https://img.shields.io/docsrs/agent-memory)](https://docs.rs/agent-memory)
+[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
+
 `agent-memory` 是一个为 LLM Agent 提供**持久化记忆**的轻量 Rust 库 + CLI。它把业界主流 AI 记忆系统（Mem0 / Letta / Zep 等）的设计精华压缩成一个**无需任何外部服务**就能跑起来的实现：内置 SQLite 存储、特征哈希嵌入与轻量知识图谱，无需向量数据库、无需图数据库（Neo4j）、无需 API key、无需联网。
 
 它同时提供三条互补的记忆通道——**关键词（BM25）+ 向量（语义相似）+ 知识图谱（实体关系/多跳推理）**，覆盖"相似内容召回"与"实体关系推理"两类不同需求。
@@ -22,14 +28,16 @@ LLM 的上下文窗口是它的"短期记忆"——窗口一满，之前的信�
 | **三类记忆** | `working`（工作/短期，滚动淘汰）· `episodic`（情景，事件历史）· `semantic`（语义，事实/偏好） |
 | **三级作用域** | `user` / `session` / `agent` 隔离，不同主体互不串记忆 |
 | **混合检索打分** | `时效 × 相关 × 重要` 加权（源自 *Generative Agents* 论文）；相关度 = BM25 关键词 + 可选向量余弦 |
-| **轻量知识图谱** | 实体 + 关系三元组（`subject -predicate-> object`），支持无向邻居、多跳路径推理；**不依赖 Neo4j**，纯 SQLite 实现（对齐 Zep/Graphiti 图记忆） |
-| **实体关系抽取** | `Extractor` trait + 离线中英规则抽取器兜底；写入时可自动落三元组，也可换 LLM 抽取 |
+| **轻量知识图谱** | 实体 + 关系三元组（`subject -predicate-> object`），支持无向邻居、多跳路径、**社区发现（连通分量）、实体消歧合并、图谱统计**；**不依赖 Neo4j**，纯 SQLite 实现（对齐 Zep/Graphiti 图记忆） |
+| **实体关系抽取** | `Extractor` trait + 离线中英规则抽取器兜底；内置注入式 `LlmExtractor`（网络由 `ChatClient` 提供，健壮解析 JSON 三元组） |
+| **时序检索** | `recall_between` / `list_between` 配合 `TimeRange` 按创建时间窗口过滤 |
 | **图上时间冲突** | 单值关系（住在/任职于）变更时旧边标记 `invalidated_at` 不删除、可追溯；多值关系（喜欢/使用）共存 |
 | **冲突解决** | 新事实取代旧事实时，旧条目标记 `superseded` 而非静默覆盖（可追溯，对齐 Zep 时序图谱思想） |
 | **遗忘机制** | TTL 过期自动清理 + 手动 `prune`，防止记忆无限膨胀（对齐 Letta 归档层） |
 | **整合去重** | `consolidate` 按向量相似度合并重复语义记忆（对齐 LangMem 蒸馏层级） |
 | **离线开箱即用** | 内置 `HashEmbedder`（特征哈希嵌入）+ `RuleExtractor`（规则抽取），无模型、无网络、无配置 |
-| **可插拔** | `Embedder` / `MemoryStore` / `Summarizer` / `Extractor` / `GraphStore` 五个 trait，可无缝替换为真实模型/存储/LLM/图数据库 |
+| **可选联网能力** | `http` feature 提供 OpenAI 兼容 `OpenAiEmbedder`（ureq+rustls，传输层可注入）；**默认构建零网络依赖** |
+| **可插拔** | `Embedder` / `MemoryStore` / `Summarizer` / `Extractor` / `GraphStore` / `ChatClient` / `HttpTransport` 等 trait，可无缝替换为真实模型/存储/LLM/图数据库 |
 | **纯 Rust + SQLite** | 单二进制、零运行时依赖、线程安全（`Arc` 共享）；记忆与图谱同库、边可溯源到来源记忆 |
 
 ## 快速开始
@@ -105,6 +113,9 @@ agent-memory graph add Rust 擅长 系统编程
 agent-memory graph replace 用户 住在 上海      # 旧边失效
 agent-memory graph neighbors 用户 2           # 2 跳邻居
 agent-memory graph path 用户 系统编程 3       # 多跳路径
+agent-memory graph communities               # 社区发现（弱连通分量）
+agent-memory graph merge Rust Rust语言       # 把别名「Rust语言」合并进「Rust」
+agent-memory graph stats                     # 实体/边/社区统计
 agent-memory graph edges --all                # 含已失效边
 agent-memory demo      # 端到端演示
 ```
@@ -122,8 +133,8 @@ agent-memory demo      # 端到端演示
 │                      AgentMemory（门面/编排）                       │
 │   写入: 评估重要性 → 计算嵌入 → 持久化 → (working滚动淘汰)          │
 │         → Extractor 抽取三元组 → 知识图谱(可溯源到来源记忆)         │
-│   检索: 候选过滤 → BM25+向量 → 时效×相关×重要 → Top-K             │
-│   图谱: 邻居扩展 / 多跳路径 / 单值关系时间失效                      │
+│   检索: 候选过滤(含时间窗口) → BM25+向量 → 时效×相关×重要 → Top-K    │
+│   图谱: 邻居扩展 / 多跳路径 / 社区发现 / 实体合并 / 单值关系时间失效  │
 │   生命周期: supersede / forget / prune / consolidate              │
 └──────┬──────────────┬──────────────┬──────────────┬──────────────┘
        │              │              │              │
@@ -161,65 +172,88 @@ agent-memory demo      # 端到端演示
 - `remember_fact(scope, key, content)` / `remember_event(...)` — 便捷入口
 - `add_with_importance(...)` — 显式重要性 / TTL / 元数据
 - `recall(scope, key, query)` → `Vec<ScoredMemory>` — 混合检索
+- `recall_between(scope, key, query, TimeRange)` — 限定创建时间窗口的检索（另配 `list_between`、`TimeRange::since/until/between`）
 - `recall_with_graph(scope, key, query)` → `(Vec<ScoredMemory>, Vec<Edge>)` — 记忆 + 实体关系一并召回
 - `supersede(scope, key, old_id, new_content)` — 冲突解决
 - `forget(id)` / `prune()` / `consolidate(scope, key, threshold)`
 - `list(scope, key, type)` / `stats(scope, key)` / `get(id)`
-- **图谱**：`remember_relation(s,p,o)`（多值）/ `replace_relation(s,p,o)`（单值变更）/ `graph_neighbors(entity, depth)` / `graph_paths(from,to,depth)` / `graph_entities()` / `graph_edges(include_invalid)` / `invalidate_relation(s,p)`
+- **图谱**：`remember_relation(s,p,o)`（多值）/ `replace_relation(s,p,o)`（单值变更）/ `graph_neighbors(entity, depth)` / `graph_paths(from,to,depth)` / `graph_entities()` / `graph_edges(include_invalid)` / `invalidate_relation(s,p)` / `graph_communities()`（社区发现）/ `merge_graph_entities(keep, alias)`（实体消歧）/ `graph_summary()`（图谱统计）
 - `with_store(...)` — 注入自定义存储/嵌入器/检索配置
 - `with_graph(Arc<dyn GraphStore>)` / `with_extractor(Arc<dyn Extractor>)` — 挂载自定义图谱后端 / 抽取器
 
-类型：`MemoryType { Working, Episodic, Semantic }`、`Scope { User, Session, Agent }`、`MemoryItem`、`ScoredMemory`、`Triple`、`Entity`、`Edge`。
+类型：`MemoryType { Working, Episodic, Semantic }`、`Scope { User, Session, Agent }`、`MemoryItem`、`ScoredMemory`、`TimeRange`、`Triple`、`Entity`、`Edge`、`GraphStats`。
 
 ## 可插拔扩展
 
+### 自定义嵌入器（`Embedder` 现在是可失败签名，便于接网络模型）
+
 ```rust
-// 换一个真实语义嵌入器（例如 OpenAI 兼容接口）
+use agent_memory::{Embedder, StoreResult};
+
 struct MyEmbedder;
 impl Embedder for MyEmbedder {
-    fn embed(&self, text: &str) -> Vec<f32> { /* 调用你的模型 */ }
-    fn dim(&self) -> usize { 1024 }
-}
-
-// 换一个 LLM 摘要器
-struct LlmSummarizer;
-impl Summarizer for LlmSummarizer {
-    fn summarize(&self, text: &str, max: usize) -> String { /* LLM 调用 */ }
-}
-
-// 用 LLM 做实体关系抽取（输出 JSON 三元组），替换离线规则抽取器
-struct LlmExtractor;
-impl Extractor for LlmExtractor {
-    fn extract(&self, text: &str) -> Vec<Triple> { /* 让模型抽取 subject/predicate/object */ vec![] }
-}
-
-// 换成真实图数据库后端（如 Neo4j），实现 GraphStore trait 即可
-struct Neo4jGraph;
-impl GraphStore for Neo4jGraph {
-    fn add_triple(&self, t: &Triple, src: Option<i64>, now: i64) -> StoreResult<i64> {
-        // 用 Cypher 写节点和边
-        todo!()
+    fn embed(&self, text: &str) -> StoreResult<Vec<f32>> {
+        // 调用你的模型；网络/鉴权失败可返回 StoreError
+        Ok(vec![])
     }
-    fn replace_triple(&self, t: &Triple, src: Option<i64>, now: i64) -> StoreResult<i64> { todo!() }
-    fn neighbors(&self, entity: &str, depth: usize) -> StoreResult<Vec<Edge>> { todo!() }
-    fn find_paths(&self, from: &str, to: &str, max: usize) -> StoreResult<Vec<Vec<Edge>>> { todo!() }
-    fn entities(&self) -> StoreResult<Vec<Entity>> { todo!() }
-    fn edges(&self, include_invalid: bool) -> StoreResult<Vec<Edge>> { todo!() }
-    fn invalidate(&self, s: &str, p: &str, now: i64) -> StoreResult<usize> { todo!() }
+    fn dim(&self) -> usize { 1024 }
 }
 ```
 
-> 内置 `RuleExtractor` 只覆盖「X 喜欢 Y」「X lives in Y」这类显式句式（置信度 0.6），用于离线兜底；真实业务建议实现 `Extractor` 接 LLM，图谱质量会显著提升，但存储与多跳检索逻辑无需改动。
+### 内置 LLM 抽取器（注入 `ChatClient`，不绑定网络库）
+
+```rust
+use agent_memory::{LlmExtractor, Extractor};
+
+// 闭包即可作为 ChatClient：在这里对接 OpenAI / Ollama / 内网网关
+let llm = LlmExtractor::new(|prompt: &str| -> Result<String, String> {
+    let body = my_http_post(prompt)?;   // 由你决定用什么 HTTP 栈
+    Ok(body)
+});
+let triples = llm.extract("用户喜欢 Rust，住在上海"); // 自动解析 JSON 三元组
+```
+
+### 可选 `http` feature：OpenAI 兼容嵌入器
+
+```toml
+[dependencies]
+agent-memory = { version = "0.1", features = ["http"] }
+```
+
+```rust
+# #[cfg(feature = "http")] fn main() -> agent_memory::StoreResult<()> {
+use agent_memory::http_embed::OpenAiEmbedder;
+use agent_memory::Embedder;
+
+// 兼容任何 /v1/embeddings 格式服务：OpenAI、vLLM、本地 TEI、各类网关
+let emb = OpenAiEmbedder::new("sk-...", "text-embedding-3-small", 1536)
+    .with_endpoint("https://你的网关/v1/embeddings"); // 可选：覆盖 endpoint
+let v = emb.embed("一段文本")?;
+# Ok(()) }
+```
+
+> 传输层抽象为 `HttpTransport`（默认 `ureq`+rustls，无需系统 OpenSSL），可注入 mock 或
+> 其他 HTTP 客户端；**不启用 `http` feature 时，整个库零网络依赖**。
+
+### 自定义图谱后端 / 摘要器
+
+实现 `GraphStore` trait 即可换成 Neo4j 等真实图数据库（邻居、路径、社区、合并、统计等
+方法都需实现）；实现 `Summarizer` trait 可把内置抽取式摘要替换为 LLM 摘要。
+
+> 内置 `RuleExtractor` 只覆盖「X 喜欢 Y」「X lives in Y」这类显式句式（置信度 0.6），用于离线兜底；真实业务建议用内置 `LlmExtractor` 接 LLM，图谱质量会显著提升，但存储与多跳检索逻辑无需改动。
 
 ## 开发与测试
 
 ```bash
-cargo build          # 编译（首次会编译 bundled SQLite）
-cargo test           # 53 个测试（单元 + 集成 + 文档）
-cargo clippy --all-targets   # 无警告（-D warnings）
+cargo build                          # 编译（首次会编译 bundled SQLite）
+cargo test                           # 全部测试（单元 + 集成 + 文档）
+cargo test --all-features            # 含可选 http feature 的测试
+cargo clippy --all-targets --all-features -- -D warnings   # 零警告
 cargo fmt
-cargo run --example demo     # 端到端演示（含知识图谱多跳推理）
+cargo run --example demo             # 端到端演示（含知识图谱多跳推理）
 ```
+
+更多开发约定见 [CONTRIBUTING.md](./CONTRIBUTING.md)，版本变更见 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## Roadmap
 
@@ -227,10 +261,11 @@ cargo run --example demo     # 端到端演示（含知识图谱多跳推理）
 - [x] 冲突解决 / TTL 遗忘 / 语义整合
 - [x] 轻量知识图谱（SQLite 三元组、多跳路径、时间失效）
 - [x] 离线中英规则实体关系抽取（LLM 抽取 trait 可换）
-- [ ] HTTP 嵌入后端（OpenAI / BGE 兼容，`features=["http"]`）
-- [ ] LLM 抽取器/摘要器接入（更高质量的三元组与蒸馏）
-- [ ] 社区发现 / 实体消歧 / 图谱摘要
-- [ ] 时序检索（按时间范围过滤、最新事实优先）
+- [x] 时序检索（按时间范围过滤：`recall_between` / `list_between` / `TimeRange`）
+- [x] 社区发现 / 实体消歧合并 / 图谱统计摘要
+- [x] 注入式 LLM 抽取器（`LlmExtractor` + `ChatClient`，不绑定网络库）
+- [x] HTTP 嵌入后端（OpenAI / BGE 兼容，`features=["http"]`，默认不启用）
+- [ ] LLM 摘要器的内置实现（`Summarizer` trait 已就绪）
 - [ ] 持久化并发优化（连接池 / WAL 调优）
 - [ ] `cargo publish` 到 crates.io
 

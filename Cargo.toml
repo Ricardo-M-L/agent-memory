@@ -4,16 +4,23 @@ version = "0.1.0"
 edition = "2021"
 description = "Offline-first, zero-config memory layer for LLM agents in Rust: working/episodic/semantic memory with BM25 + vector recall, a lightweight SQLite knowledge graph, and no external services."
 license = "MIT"
-keywords = ["agent", "memory", "llm", "rag", "knowledge-graph", "sqlite"]
+keywords = ["agent", "memory", "llm", "rag", "knowledge-graph"]
 categories = ["command-line-utilities", "embedded-database", "mathematics"]
 readme = "README.md"
 repository = "https://github.com/Ricardo-M-L/agent-memory"
 homepage = "https://github.com/Ricardo-M-L/agent-memory"
+documentation = "https://docs.rs/agent-memory"
+
+[features]
+default = []
+# 启用 OpenAI 兼容的 HTTP 嵌入器（引入 ureq/rustls）。默认关闭，保证离线零网络依赖。
+http = ["dep:ureq"]
 
 [dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+ureq = { version = "2", optional = true, default-features = false, features = ["json", "rustls"] }
 
 [lib]
 name = "agent_memory"

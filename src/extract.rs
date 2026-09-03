@@ -201,6 +201,156 @@ impl Extractor for RuleExtractor {
     }
 }
 
+// ===== LLM 抽取器（网络由调用方注入，本 crate 不绑定具体 HTTP 库）=====
+
+/// 聊天客户端抽象：给定完整 prompt，返回模型的原始文本输出。
+///
+/// 这样设计是为了让 [`LlmExtractor`] 不依赖任何特定网络/SDK：你可以为 OpenAI、
+/// 本地 Ollama、公司内网网关等任意后端实现本 trait（也可直接传闭包）。
+pub trait ChatClient: Send + Sync {
+    /// 发送 prompt，返回模型文本；失败返回错误描述。
+    fn complete(&self, prompt: &str) -> Result<String, String>;
+}
+
+/// 为满足签名的闭包自动实现 [`ChatClient`]，便于快速接入。
+impl<F> ChatClient for F
+where
+    F: Fn(&str) -> Result<String, String> + Send + Sync,
+{
+    fn complete(&self, prompt: &str) -> Result<String, String> {
+        (self)(prompt)
+    }
+}
+
+/// 构造给 LLM 的抽取 prompt（要求输出 JSON 数组）。
+pub fn extraction_prompt(text: &str) -> String {
+    format!(
+        "从下面这段文本中抽取知识图谱三元组，每个三元组包含 subject(主体)、predicate(关系)、\
+object(客体)，以及可选的 confidence(0~1)。只抽取文本中明确表达的事实，不要臆测；\
+没有可抽取内容时返回空数组。严格只输出 JSON 数组，不要输出任何解释或 Markdown 代码块。\n\n\
+示例输出：[{{\"subject\":\"用户\",\"predicate\":\"喜欢\",\"object\":\"Rust\",\"confidence\":0.95}}]\n\n\
+文本：{text}"
+    )
+}
+
+/// 从 LLM 输出中健壮地解析三元组。
+///
+/// 兼容：被 ```json 代码块包裹、单个对象、`{{"triples":[...]}}` 包裹、
+/// 以及 `s/p/o`、`head/relation/tail` 等常见字段别名。无法解析的条目会被跳过。
+pub fn parse_triples_json(raw: &str, default_confidence: f32) -> Vec<Triple> {
+    let body = strip_code_fence(raw.trim());
+    // 截取最外层数组；若没有数组则尝试当单对象解析。
+    let value = match (body.find('['), body.rfind(']')) {
+        (Some(a), Some(b)) if b > a => serde_json::from_str::<serde_json::Value>(&body[a..=b]),
+        _ => serde_json::from_str::<serde_json::Value>(&body),
+    };
+    let value = match value {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    let arr = pick_array(value);
+    let mut out = Vec::new();
+    for item in arr {
+        let obj = match item.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        let subject = match first_str(obj, &["subject", "s", "head", "source", "from"]) {
+            Some(v) => v,
+            None => continue,
+        };
+        let predicate = match first_str(obj, &["predicate", "p", "relation", "rel", "edge"]) {
+            Some(v) => v,
+            None => continue,
+        };
+        let object = match first_str(obj, &["object", "o", "tail", "target", "to"]) {
+            Some(v) => v,
+            None => continue,
+        };
+        if subject.is_empty() || predicate.is_empty() || object.is_empty() {
+            continue;
+        }
+        let conf = obj
+            .get("confidence")
+            .and_then(|v| v.as_f64())
+            .map(|c| c as f32)
+            .unwrap_or(default_confidence);
+        out.push(Triple::new(subject, predicate, object).with_confidence(conf));
+    }
+    out
+}
+
+/// 剥掉 Markdown 代码围栏。
+fn strip_code_fence(s: &str) -> String {
+    let mut t = s.trim();
+    if let Some(rest) = t.strip_prefix("```") {
+        // 去掉可能的 json/语言标记行。
+        let rest = rest.trim_start_matches(|c: char| c != '\n').trim_start();
+        t = rest.strip_suffix("```").map(str::trim).unwrap_or(rest);
+    }
+    t.to_string()
+}
+
+/// 从 Value 中取出三元组数组（兼容裸数组 / {"triples":[...]} / {"relations":[...]}）。
+fn pick_array(value: serde_json::Value) -> Vec<serde_json::Value> {
+    match value {
+        serde_json::Value::Array(a) => a,
+        serde_json::Value::Object(mut o) => {
+            for key in ["triples", "relations", "edges", "data", "result"] {
+                if let Some(serde_json::Value::Array(a)) = o.remove(key) {
+                    return a;
+                }
+            }
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn first_str(obj: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> Option<String> {
+    for k in keys {
+        if let Some(v) = obj.get(*k).and_then(|v| v.as_str()) {
+            let t = v.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// 基于 LLM 的抽取器：网络调用通过注入的 [`ChatClient`] 完成，离线测试可传 mock。
+pub struct LlmExtractor<C: ChatClient> {
+    client: C,
+    default_confidence: f32,
+}
+
+impl<C: ChatClient> LlmExtractor<C> {
+    pub fn new(client: C) -> Self {
+        Self {
+            client,
+            default_confidence: 0.9,
+        }
+    }
+
+    /// 设置 JSON 未给 confidence 时使用的默认置信度。
+    pub fn with_default_confidence(mut self, c: f32) -> Self {
+        self.default_confidence = c.clamp(0.0, 1.0);
+        self
+    }
+}
+
+impl<C: ChatClient> Extractor for LlmExtractor<C> {
+    fn extract(&self, text: &str) -> Vec<Triple> {
+        match self.client.complete(&extraction_prompt(text)) {
+            Ok(out) => parse_triples_json(&out, self.default_confidence),
+            // 抽取失败不影响主流程，返回空（调用方可记录日志）。
+            Err(_) => Vec::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,5 +422,55 @@ mod tests {
         let ex = RuleExtractor::new();
         let t = ex.extract("用户喜欢 Rust。用户住在上海。");
         assert_eq!(t.len(), 2);
+    }
+
+    #[test]
+    fn parse_plain_json_array() {
+        let raw = r#"[{"subject":"用户","predicate":"使用","object":"Rust","confidence":0.95}]"#;
+        let t = parse_triples_json(raw, 0.9);
+        assert_eq!(t.len(), 1);
+        assert_eq!(
+            t[0],
+            Triple::new("用户", "使用", "Rust").with_confidence(0.95)
+        );
+    }
+
+    #[test]
+    fn parse_json_fenced_and_wrapped() {
+        // 代码围栏 + 外层对象 + 字段别名 head/relation/tail
+        let raw = "```json\n{\"triples\":[{\"head\":\"alice\",\"relation\":\"lives_in\",\"tail\":\"beijing\"}]}\n```";
+        let t = parse_triples_json(raw, 0.8);
+        assert_eq!(t.len(), 1);
+        assert_eq!(
+            t[0],
+            Triple::new("alice", "lives_in", "beijing").with_confidence(0.8)
+        );
+    }
+
+    #[test]
+    fn parse_skips_malformed_and_prose() {
+        let raw = "好的，结果是：[{\"subject\":\"a\"}, {\"subject\":\"a\",\"predicate\":\"r\",\"object\":\"b\"}]";
+        let t = parse_triples_json(raw, 0.7);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].object, "b");
+        assert!(parse_triples_json("完全不是 JSON", 0.7).is_empty());
+    }
+
+    #[test]
+    fn llm_extractor_uses_injected_client() {
+        // mock 客户端：回固定 JSON，验证 prompt 被传入且结果被解析。
+        let ex = LlmExtractor::new(|prompt: &str| {
+            assert!(prompt.contains("三元组"));
+            Ok(r#"[{"subject":"用户","predicate":"研究","object":"知识图谱"}]"#.to_string())
+        });
+        let t = ex.extract("任意文本");
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].predicate, "研究");
+    }
+
+    #[test]
+    fn llm_extractor_swallows_client_error() {
+        let ex = LlmExtractor::new(|_: &str| Err("network down".to_string()));
+        assert!(ex.extract("文本").is_empty());
     }
 }

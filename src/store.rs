@@ -15,6 +15,8 @@ pub type StoreResult<T> = Result<T, StoreError>;
 pub enum StoreError {
     /// 底层数据库错误。
     Db(String),
+    /// 网络 / HTTP 调用错误（仅 `http` feature 下的远端后端会产生）。
+    Http(String),
     /// 其他错误。
     Other(String),
 }
@@ -23,6 +25,7 @@ impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StoreError::Db(e) => write!(f, "database error: {e}"),
+            StoreError::Http(e) => write!(f, "http error: {e}"),
             StoreError::Other(e) => write!(f, "{e}"),
         }
     }

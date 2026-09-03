@@ -138,7 +138,7 @@ fn main() {
 struct CustomEmbedder(HashEmbedder);
 
 impl Embedder for CustomEmbedder {
-    fn embed(&self, text: &str) -> Vec<f32> {
+    fn embed(&self, text: &str) -> agent_memory::StoreResult<Vec<f32>> {
         self.0.embed(text)
     }
     fn dim(&self) -> usize {

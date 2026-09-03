@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 use crate::db::Db;
 use crate::store::StoreResult;
@@ -39,7 +39,7 @@ impl Triple {
         }
     }
 
-    /// 设置置信度 [0,1]。
+    /// 设置置信度 \[0,1\]。
     pub fn with_confidence(mut self, c: f32) -> Self {
         self.confidence = c.clamp(0.0, 1.0);
         self
@@ -81,6 +81,21 @@ impl Edge {
     }
 }
 
+/// 图的整体统计。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GraphStats {
+    /// 实体总数。
+    pub entities: usize,
+    /// 有效边数。
+    pub valid_edges: usize,
+    /// 已失效（被替换）但保留可追溯的边数。
+    pub invalid_edges: usize,
+    /// 弱连通分量个数（社区数，含孤立实体）。
+    pub communities: usize,
+    /// 最大社区包含的实体数。
+    pub largest_community: usize,
+}
+
 /// 图存储抽象（可替换为 Neo4j 等真实图数据库后端）。
 pub trait GraphStore: Send + Sync {
     /// 新增一条三元组（多值关系，如「喜欢」「使用」可同时指向多个客体）。
@@ -118,6 +133,21 @@ pub trait GraphStore: Send + Sync {
 
     /// 主动失效某主体的某关系，返回失效条数。
     fn invalidate(&self, subject: &str, predicate: &str, now: i64) -> StoreResult<usize>;
+
+    /// 社区发现：基于有效边计算弱连通分量（无向），每个分量是一组实体名。
+    ///
+    /// 没有任何边的实体作为大小为 1 的独立社区返回。
+    fn communities(&self) -> StoreResult<Vec<Vec<String>>>;
+
+    /// 实体消歧/合并：把 `alias` 实体合并进 `keep`（别名归一）。
+    ///
+    /// - `alias` 上的边全部改接到 `keep`；改接后形成的自环删除；
+    /// - 改接后重复的 `(主体,关系,客体)` 合并为一条（保留最早创建、尽量保留有效状态）；
+    /// - 最后删除 `alias` 实体。返回受影响（改接/合并）的边数。
+    fn merge_entities(&self, keep: &str, alias: &str) -> StoreResult<usize>;
+
+    /// 图统计（实体/有效边/失效边/社区数/最大社区）。
+    fn graph_stats(&self) -> StoreResult<GraphStats>;
 }
 
 /// 基于共享 SQLite 连接的图存储实现。
@@ -386,6 +416,199 @@ impl GraphStore for SqliteGraphStore {
         )?;
         Ok(n)
     }
+
+    fn communities(&self) -> StoreResult<Vec<Vec<String>>> {
+        let entities = self.entities()?;
+        let edges = self.load_edges(false)?;
+
+        // 并查集（按实体 id）。
+        let mut parent: HashMap<i64, i64> = entities.iter().map(|e| (e.id, e.id)).collect();
+        fn find(parent: &mut HashMap<i64, i64>, x: i64) -> i64 {
+            let mut root = x;
+            while parent.get(&root).copied() != Some(root) {
+                root = parent.get(&root).copied().unwrap_or(root);
+            }
+            // 路径压缩。
+            let mut cur = x;
+            while parent.get(&cur).copied() != Some(root) {
+                let next = parent.get(&cur).copied().unwrap_or(cur);
+                parent.insert(cur, root);
+                cur = next;
+            }
+            root
+        }
+        // 边存的是名字，建立 name->id 映射后再 union。
+        let name_to_id: HashMap<&str, i64> =
+            entities.iter().map(|e| (e.name.as_str(), e.id)).collect();
+        for e in &edges {
+            if let (Some(&s), Some(&o)) = (
+                name_to_id.get(e.subject.as_str()),
+                name_to_id.get(e.object.as_str()),
+            ) {
+                let rs = find(&mut parent, s);
+                let ro = find(&mut parent, o);
+                if rs != ro {
+                    parent.insert(rs, ro);
+                }
+            }
+        }
+
+        // 按根分组实体名。
+        let mut groups: HashMap<i64, Vec<String>> = HashMap::new();
+        for en in &entities {
+            let root = find(&mut parent, en.id);
+            groups.entry(root).or_default().push(en.name.clone());
+        }
+        let mut out: Vec<Vec<String>> = groups
+            .into_values()
+            .map(|mut g| {
+                g.sort();
+                g
+            })
+            .collect();
+        // 大社区在前、同规模按字典序，结果稳定。
+        out.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+        Ok(out)
+    }
+
+    fn merge_entities(&self, keep: &str, alias: &str) -> StoreResult<usize> {
+        let keep = keep.trim();
+        let alias = alias.trim();
+        if keep == alias {
+            return Err(crate::store::StoreError::Other("keep 与 alias 相同".into()));
+        }
+        let mut conn = self.db.lock();
+        let lookup_id = |name: &str| -> StoreResult<Option<i64>> {
+            let v: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM graph_entities WHERE name = ?1",
+                    params![name],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            Ok(v)
+        };
+        let kid = lookup_id(keep)?
+            .ok_or_else(|| crate::store::StoreError::Other(format!("实体不存在: {keep}")))?;
+        let aid = lookup_id(alias)?
+            .ok_or_else(|| crate::store::StoreError::Other(format!("实体不存在: {alias}")))?;
+
+        // 读取所有涉及 keep/alias 的边（含已失效）。
+        struct Raw {
+            sid: i64,
+            pred: String,
+            oid: i64,
+            source: Option<i64>,
+            conf: f32,
+            created: i64,
+            invalidated: Option<i64>,
+        }
+        let mut raws = Vec::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT subject_id, predicate, object_id, source_memory_id, \
+                        confidence, created_at, invalidated_at \
+                 FROM graph_edges WHERE subject_id IN (?1,?2) OR object_id IN (?1,?2)",
+            )?;
+            let rows = stmt.query_map(params![kid, aid], |r| {
+                Ok(Raw {
+                    sid: r.get(0)?,
+                    pred: r.get(1)?,
+                    oid: r.get(2)?,
+                    source: r.get(3)?,
+                    conf: r.get(4)?,
+                    created: r.get(5)?,
+                    invalidated: r.get(6)?,
+                })
+            })?;
+            for r in rows {
+                raws.push(r?);
+            }
+        }
+
+        let tx = conn.transaction()?;
+        // 改接 alias->keep，去自环，按 (s,p,o) 合并重复。
+        let mut merged: HashMap<(i64, String, i64), Raw> = HashMap::new();
+        let mut touched_alias = 0usize;
+        for raw in raws {
+            if raw.sid == aid || raw.oid == aid {
+                touched_alias += 1;
+            }
+            let sid = if raw.sid == aid { kid } else { raw.sid };
+            let oid = if raw.oid == aid { kid } else { raw.oid };
+            if sid == oid {
+                continue; // 自环无意义，丢弃。
+            }
+            let key = (sid, raw.pred.clone(), oid);
+            match merged.get_mut(&key) {
+                Some(existing) => {
+                    existing.created = existing.created.min(raw.created);
+                    existing.conf = existing.conf.max(raw.conf);
+                    existing.source = existing.source.or(raw.source);
+                    // 只要有一条仍有效，合并后即为有效。
+                    existing.invalidated = match (existing.invalidated, raw.invalidated) {
+                        (None, _) | (_, None) => None,
+                        (Some(a), Some(b)) => Some(a.min(b)),
+                    };
+                }
+                None => {
+                    merged.insert(
+                        key,
+                        Raw {
+                            sid,
+                            pred: raw.pred,
+                            oid,
+                            source: raw.source,
+                            conf: raw.conf,
+                            created: raw.created,
+                            invalidated: raw.invalidated,
+                        },
+                    );
+                }
+            }
+        }
+        // 删除原始涉及边。
+        tx.execute(
+            "DELETE FROM graph_edges WHERE subject_id IN (?1,?2) OR object_id IN (?1,?2)",
+            params![kid, aid],
+        )?;
+        // 重新写入合并后的边（保留时间/置信度/失效状态）。
+        for m in merged.values() {
+            tx.execute(
+                "INSERT INTO graph_edges \
+                 (subject_id, predicate, object_id, source_memory_id, confidence, created_at, invalidated_at) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                params![m.sid, m.pred, m.oid, m.source, m.conf, m.created, m.invalidated],
+            )?;
+        }
+        // 合并提及次数并删除别名实体。
+        tx.execute(
+            "UPDATE graph_entities SET mention_count = mention_count + \
+                 (SELECT mention_count FROM graph_entities WHERE id = ?2), \
+                 last_seen = MAX(last_seen, (SELECT last_seen FROM graph_entities WHERE id = ?2)) \
+             WHERE id = ?1",
+            params![kid, aid],
+        )?;
+        tx.execute("DELETE FROM graph_entities WHERE id = ?1", params![aid])?;
+        tx.commit()?;
+        Ok(touched_alias)
+    }
+
+    fn graph_stats(&self) -> StoreResult<GraphStats> {
+        let entities = self.entities()?.len();
+        let all = self.load_edges(true)?;
+        let valid = all.iter().filter(|e| e.is_valid()).count();
+        let invalid = all.len() - valid;
+        let communities = self.communities()?;
+        let largest = communities.iter().map(|c| c.len()).max().unwrap_or(0);
+        Ok(GraphStats {
+            entities,
+            valid_edges: valid,
+            invalid_edges: invalid,
+            communities: communities.len(),
+            largest_community: largest,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -501,5 +724,65 @@ mod tests {
         let n = g.invalidate("用户", "任职", 50).unwrap();
         assert_eq!(n, 1);
         assert!(g.edges(false).unwrap().is_empty());
+    }
+
+    #[test]
+    fn communities_are_connected_components() {
+        let g = store();
+        // 社区1: a-b-c ; 社区2: d-e ; 孤立点 f
+        g.add_triple(&Triple::new("a", "r", "b"), None, 1).unwrap();
+        g.add_triple(&Triple::new("b", "r", "c"), None, 2).unwrap();
+        g.add_triple(&Triple::new("d", "r", "e"), None, 3).unwrap();
+        g.upsert_entity("f", 4).unwrap();
+
+        let comms = g.communities().unwrap();
+        // 3 个社区，最大 3 个实体
+        assert_eq!(comms.len(), 3);
+        assert_eq!(comms[0], vec!["a", "b", "c"]);
+        assert!(comms.iter().any(|c| c == &vec!["d", "e"]));
+        assert!(comms.iter().any(|c| c == &vec!["f"]));
+
+        let st = g.graph_stats().unwrap();
+        assert_eq!(st.entities, 6);
+        assert_eq!(st.valid_edges, 3);
+        assert_eq!(st.communities, 3);
+        assert_eq!(st.largest_community, 3);
+    }
+
+    #[test]
+    fn merge_entities_redirects_and_dedups() {
+        let g = store();
+        // "Rust语言" 是 "Rust" 的别名
+        g.add_triple(&Triple::new("用户", "使用", "Rust语言"), None, 1)
+            .unwrap();
+        g.add_triple(&Triple::new("Rust语言", "适合", "系统编程"), None, 2)
+            .unwrap();
+        g.add_triple(&Triple::new("Rust", "适合", "系统编程"), None, 3)
+            .unwrap(); // 合并后重复
+        g.add_triple(&Triple::new("Rust", "是", "Rust语言"), None, 4)
+            .unwrap(); // 合并后变自环
+
+        let n = g.merge_entities("Rust", "Rust语言").unwrap();
+        assert_eq!(n, 3, "别名参与了 3 条边");
+
+        // 别名实体已删除
+        assert!(g.entities().unwrap().iter().all(|e| e.name != "Rust语言"));
+        let edges = g.edges(true).unwrap();
+        // 用户->Rust、Rust->系统编程（两条重复合并为一）、自环被删 => 2 条
+        assert_eq!(edges.len(), 2);
+        assert!(edges
+            .iter()
+            .any(|e| e.subject == "用户" && e.object == "Rust"));
+        assert!(edges
+            .iter()
+            .any(|e| e.subject == "Rust" && e.object == "系统编程"));
+        assert!(!edges.iter().any(|e| e.subject == e.object));
+    }
+
+    #[test]
+    fn merge_missing_entity_errors() {
+        let g = store();
+        g.add_triple(&Triple::new("a", "r", "b"), None, 1).unwrap();
+        assert!(g.merge_entities("a", "不存在").is_err());
     }
 }

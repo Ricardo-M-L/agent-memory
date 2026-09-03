@@ -1,7 +1,7 @@
 //! 检索打分：`时效 × 相关 × 重要`（recency × relevance × importance）。
 //!
 //! 该打分框架源自 *Generative Agents: Interactive Simulacra of Human Behavior*
-//! (Park et al., 2023)，并被现代 AI 记忆系统广泛沿用。本项目将三者归一化到 [0,1]
+//! (Park et al., 2023)，并被现代 AI 记忆系统广泛沿用。本项目将三者归一化到 \[0,1\]
 //! 后做加权求和：
 //!
 //! - **recency**：指数半衰期衰减 `2^(-age/halflife)`；
@@ -48,18 +48,18 @@ pub struct ScoredMemory {
     pub item: MemoryItem,
     /// 加权总分（用于排序）。
     pub score: f32,
-    /// 相关度分量 [0,1]。
+    /// 相关度分量 \[0,1\]。
     pub relevance: f32,
-    /// 时效分量 [0,1]。
+    /// 时效分量 \[0,1\]。
     pub recency: f32,
-    /// 重要性分量 [0,1]。
+    /// 重要性分量 \[0,1\]。
     pub importance: f32,
 }
 
 /// 对单条记忆打分。
 ///
 /// - `query_vec`：查询向量（可选，用于向量混合）。
-/// - `kw_score`：BM25 关键词相关度 [0,1]。
+/// - `kw_score`：BM25 关键词相关度 \[0,1\]。
 /// - `cfg`：检索配置。
 /// - `now`：当前 epoch 毫秒。
 pub fn score_item(

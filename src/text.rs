@@ -67,7 +67,7 @@ pub fn idf(doc_freq: usize, total: usize) -> f32 {
     (1.0 + (total as f32) / (1.0 + doc_freq as f32)).ln()
 }
 
-/// 对候选文档集合返回每个文档的 BM25 关键词相关度，归一化到 [0,1]。
+/// 对候选文档集合返回每个文档的 BM25 关键词相关度，归一化到 \[0,1\]。
 ///
 /// `docs[i]` 对应返回的 `scores[i]`。
 pub fn bm25_scores(query: &str, docs: &[&str]) -> Vec<f32> {

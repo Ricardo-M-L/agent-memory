@@ -44,9 +44,15 @@ pub mod summarizer;
 pub mod text;
 pub mod types;
 
+/// OpenAI 兼容的 HTTP 嵌入器（需启用 `http` feature）。
+#[cfg(feature = "http")]
+pub mod http_embed;
+
 pub use embed::{Embedder, HashEmbedder};
-pub use extract::{Extractor, RuleExtractor};
-pub use graph::{Edge, Entity, GraphStore, SqliteGraphStore, Triple};
-pub use memory::{AgentMemory, MemoryStats};
+pub use extract::{
+    extraction_prompt, parse_triples_json, ChatClient, Extractor, LlmExtractor, RuleExtractor,
+};
+pub use graph::{Edge, Entity, GraphStats, GraphStore, SqliteGraphStore, Triple};
+pub use memory::{AgentMemory, MemoryStats, TimeRange};
 pub use retrieval::{RetrievalConfig, ScoredMemory};
 pub use store::{MemoryStore, StoreError, StoreResult};

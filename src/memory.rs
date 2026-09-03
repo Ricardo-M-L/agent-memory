@@ -33,6 +33,50 @@ pub struct MemoryStats {
     pub total: usize,
 }
 
+/// 记忆创建时间范围（epoch 毫秒，闭区间）。`None` 表示该侧不设界。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TimeRange {
+    /// 起始时间（含）。
+    pub start_ms: Option<i64>,
+    /// 结束时间（含）。
+    pub end_ms: Option<i64>,
+}
+
+impl TimeRange {
+    /// 不限制时间（返回全部）。
+    pub fn all() -> Self {
+        Self {
+            start_ms: None,
+            end_ms: None,
+        }
+    }
+    /// 只取 `start_ms` 之后（含）的记忆。
+    pub fn since(start_ms: i64) -> Self {
+        Self {
+            start_ms: Some(start_ms),
+            end_ms: None,
+        }
+    }
+    /// 只取 `end_ms` 之前（含）的记忆。
+    pub fn until(end_ms: i64) -> Self {
+        Self {
+            start_ms: None,
+            end_ms: Some(end_ms),
+        }
+    }
+    /// 闭区间 `[start_ms, end_ms]`。
+    pub fn between(start_ms: i64, end_ms: i64) -> Self {
+        Self {
+            start_ms: Some(start_ms),
+            end_ms: Some(end_ms),
+        }
+    }
+    /// 时间戳是否落在范围内。
+    pub fn contains(&self, ts: i64) -> bool {
+        self.start_ms.is_none_or(|s| ts >= s) && self.end_ms.is_none_or(|e| ts <= e)
+    }
+}
+
 /// 记忆库门面。
 ///
 /// 线程安全：内部存储通过锁同步，可用 `Arc<AgentMemory>` 在多线程 agent 中共享。
@@ -137,7 +181,7 @@ impl AgentMemory {
         meta: Option<String>,
     ) -> StoreResult<MemoryItem> {
         let now = now_millis();
-        let vec = self.embedder.embed(content);
+        let vec = self.embedder.embed(content)?;
         let item = NewMemory {
             scope,
             scope_key: key.to_string(),
@@ -180,14 +224,26 @@ impl AgentMemory {
 
     /// 检索：按 `时效 × 相关 × 重要` 打分，返回 Top-K。
     pub fn recall(&self, scope: Scope, key: &str, query: &str) -> StoreResult<Vec<ScoredMemory>> {
+        self.recall_between(scope, key, query, TimeRange::all())
+    }
+
+    /// 检索（限定创建时间范围）：只在 [`TimeRange`] 内的有效记忆中打分排序。
+    pub fn recall_between(
+        &self,
+        scope: Scope,
+        key: &str,
+        query: &str,
+        range: TimeRange,
+    ) -> StoreResult<Vec<ScoredMemory>> {
         let now = now_millis();
         let mut candidates = self.store.list(scope, key, None)?;
-        candidates.retain(|m| !m.is_superseded() && !m.is_expired(now));
+        candidates
+            .retain(|m| !m.is_superseded() && !m.is_expired(now) && range.contains(m.created_at));
         if candidates.is_empty() {
             return Ok(vec![]);
         }
 
-        let qvec = self.embedder.embed(query);
+        let qvec = self.embedder.embed(query)?;
         let docs: Vec<&str> = candidates.iter().map(|m| m.content.as_str()).collect();
         let kw = text::bm25_scores(query, &docs);
 
@@ -297,13 +353,26 @@ impl AgentMemory {
         key: &str,
         ty: Option<MemoryType>,
     ) -> StoreResult<Vec<MemoryItem>> {
+        self.list_between(scope, key, ty, TimeRange::all())
+    }
+
+    /// 列出某作用域、创建时间落在 `range` 内的有效记忆（按创建时间升序）。
+    pub fn list_between(
+        &self,
+        scope: Scope,
+        key: &str,
+        ty: Option<MemoryType>,
+        range: TimeRange,
+    ) -> StoreResult<Vec<MemoryItem>> {
         let now = now_millis();
-        Ok(self
+        let mut items: Vec<MemoryItem> = self
             .store
             .list(scope, key, ty)?
             .into_iter()
-            .filter(|m| !m.is_superseded() && !m.is_expired(now))
-            .collect())
+            .filter(|m| !m.is_superseded() && !m.is_expired(now) && range.contains(m.created_at))
+            .collect();
+        items.sort_by_key(|m| m.created_at);
+        Ok(items)
     }
 
     /// 访问底层存储（高级用法）。
@@ -389,6 +458,21 @@ impl AgentMemory {
     pub fn invalidate_relation(&self, subject: &str, predicate: &str) -> StoreResult<usize> {
         self.graph_ref()?
             .invalidate(subject, predicate, now_millis())
+    }
+
+    /// 社区发现：返回弱连通分量（每组是一个实体社区）。
+    pub fn graph_communities(&self) -> StoreResult<Vec<Vec<String>>> {
+        self.graph_ref()?.communities()
+    }
+
+    /// 实体消歧：把别名实体 `alias` 合并进规范实体 `keep`，返回受影响边数。
+    pub fn merge_graph_entities(&self, keep: &str, alias: &str) -> StoreResult<usize> {
+        self.graph_ref()?.merge_entities(keep, alias)
+    }
+
+    /// 图谱统计摘要（实体/边/社区）。
+    pub fn graph_summary(&self) -> StoreResult<crate::graph::GraphStats> {
+        self.graph_ref()?.graph_stats()
     }
 
     /// 检索记忆的同时，附带查询中提到实体的 1 跳图谱关系。
@@ -636,5 +720,43 @@ mod tests {
         assert_eq!(valid.len(), 1);
         assert_eq!(valid[0].object, "上海");
         assert_eq!(m.graph_edges(true).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn time_range_filters_recall_and_list() {
+        let m = mem();
+        let a = m
+            .remember_fact(Scope::User, "u", "第一条事实 Alpha")
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let b = m
+            .remember_fact(Scope::User, "u", "第二条事实 Beta")
+            .unwrap();
+        assert!(b.created_at > a.created_at);
+
+        // since(b) 只包含 b
+        let later = m
+            .list_between(Scope::User, "u", None, TimeRange::since(b.created_at))
+            .unwrap();
+        assert_eq!(later.len(), 1);
+        assert_eq!(later[0].id, b.id);
+
+        // until(a) 只包含 a
+        let earlier = m
+            .list_between(Scope::User, "u", None, TimeRange::until(a.created_at))
+            .unwrap();
+        assert_eq!(earlier.len(), 1);
+        assert_eq!(earlier[0].id, a.id);
+
+        // recall_between 同样受时间范围约束
+        let hits = m
+            .recall_between(Scope::User, "u", "事实", TimeRange::since(b.created_at))
+            .unwrap();
+        assert!(hits.iter().all(|h| h.item.id == b.id));
+
+        // TimeRange::contains 边界为闭区间
+        assert!(TimeRange::between(10, 20).contains(10));
+        assert!(TimeRange::between(10, 20).contains(20));
+        assert!(!TimeRange::between(10, 20).contains(9));
     }
 }
