@@ -2,7 +2,7 @@
 //!
 //! 用法：
 //! ```text
-//! agent-memory <command> [args...]
+//! agent-memory [--db <database_path>] <command> [args...]
 //!
 //! 命令：
 //!   add <scope> <key> <type> <text...>      写入一条记忆
@@ -25,7 +25,7 @@
 //!   demo                                    运行端到端演示
 //!   help                                    帮助
 //!
-//! 数据库路径通过环境变量 AGENT_MEMORY_DB 指定，默认 ./agent-memory.db。
+//! 数据库路径默认 ./agent-memory.db，可通过环境变量 AGENT_MEMORY_DB 指定，或通过 --db 覆盖。
 //! ```
 
 use std::process::ExitCode;
@@ -35,13 +35,17 @@ use agent_memory::types::{MemoryType, Scope};
 use agent_memory::{AgentMemory, MemoryStats};
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let db = match parse_db_arg(&mut args) {
+        Ok(db) => db,
+        Err(msg) => return fail(&msg),
+    };
+
     if args.is_empty() {
         print_help();
         return ExitCode::SUCCESS;
     }
 
-    let db = std::env::var("AGENT_MEMORY_DB").unwrap_or_else(|_| "agent-memory.db".into());
     let mem = match AgentMemory::open(&db) {
         Ok(m) => m,
         Err(e) => {
@@ -76,7 +80,7 @@ fn main() -> ExitCode {
 fn print_help() {
     println!(
         "agent-memory —— 离线优先的 LLM Agent 记忆层（Rust）\n\n\
-         用法: agent-memory <command> [args...]\n\n\
+         用法: agent-memory [--db <database_path>] <command> [args...]\n\n\
          命令:\n\
          \x20 add <scope> <key> <type> <text...>      写入记忆（type: working|episodic|semantic）\n\
          \x20 recall <scope> <key> <query...>         检索（按 时效×相关×重要 打分）\n\
@@ -96,16 +100,66 @@ fn print_help() {
          \x20 graph merge <keep> <alias>              合并别名实体（消歧）\n\
          \x20 graph stats                             图谱统计摘要\n\
          \x20 demo                                    端到端演示\n\n\
-         数据库: 环境变量 AGENT_MEMORY_DB 指定，默认 ./agent-memory.db"
+         数据库: 默认 ./agent-memory.db，可用环境变量 AGENT_MEMORY_DB 或 --db/-d 指定"
     );
 }
 
-fn parse_scope(s: &str) -> Option<Scope> {
-    Scope::from_str(s).ok()
+fn parse_db_arg(args: &mut Vec<String>) -> Result<String, String> {
+    let mut db = std::env::var("AGENT_MEMORY_DB").unwrap_or_else(|_| "agent-memory.db".into());
+    let mut rest = Vec::with_capacity(args.len());
+    let mut i = 0;
+
+    while i < args.len() {
+        match args[i].as_str() {
+            "--db" | "-d" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| "用法: --db <database_path>".to_string())?;
+                db = value.clone();
+                i += 2;
+            }
+            arg if arg.starts_with("--db=") => {
+                let value = arg
+                    .split_once('=')
+                    .and_then(|(_, value)| if value.is_empty() { None } else { Some(value) })
+                    .ok_or_else(|| "用法: --db=<database_path>".to_string())?;
+                db = value.to_string();
+                i += 1;
+            }
+            other => {
+                rest.push(other.to_string());
+                i += 1;
+            }
+        }
+    }
+
+    *args = rest;
+    Ok(db)
 }
 
-fn parse_type(s: &str) -> Option<MemoryType> {
-    MemoryType::from_str(s).ok()
+fn parse_scope_arg(s: &str) -> Result<Scope, String> {
+    Scope::from_str(s).map_err(|_| format!("无效 scope: {s}（可选 user|session|agent）"))
+}
+
+fn parse_type_arg(s: &str) -> Result<MemoryType, String> {
+    MemoryType::from_str(s).map_err(|_| format!("无效 type: {s}（可选 working|episodic|semantic）"))
+}
+
+fn parse_depth_arg(s: Option<&str>, default: usize, name: &str) -> Result<usize, String> {
+    let depth = match s {
+        Some(raw) => {
+            let n = raw
+                .parse::<usize>()
+                .map_err(|_| format!("{name} 必须是整数：{raw}"))?;
+            if n == 0 {
+                return Err(format!("{name} 必须是大于 0 的整数"));
+            }
+            n
+        }
+        None => default,
+    };
+
+    Ok(depth)
 }
 
 fn fail(msg: &str) -> ExitCode {
@@ -122,15 +176,15 @@ fn cmd_add(mem: &AgentMemory, a: &[String]) -> ExitCode {
         return fail("用法: add <scope> <key> <type> <text...>");
     }
     let (scope, key, ty, rest) = (
-        parse_scope(&a[0]).unwrap_or_else(|| {
-            eprintln!("无效 scope: {}", a[0]);
-            std::process::exit(1);
-        }),
+        match parse_scope_arg(&a[0]) {
+            Ok(v) => v,
+            Err(err) => return fail(&err),
+        },
         &a[1],
-        parse_type(&a[2]).unwrap_or_else(|| {
-            eprintln!("无效 type: {} (working|episodic|semantic)", a[2]);
-            std::process::exit(1);
-        }),
+        match parse_type_arg(&a[2]) {
+            Ok(v) => v,
+            Err(err) => return fail(&err),
+        },
         a[3..].join(" "),
     );
     match mem.add(scope, key, ty, &rest) {
@@ -152,10 +206,10 @@ fn cmd_recall(mem: &AgentMemory, a: &[String]) -> ExitCode {
     if a.len() < 3 {
         return fail("用法: recall <scope> <key> <query...>");
     }
-    let scope = parse_scope(&a[0]).unwrap_or_else(|| {
-        eprintln!("无效 scope: {}", a[0]);
-        std::process::exit(1);
-    });
+    let scope = match parse_scope_arg(&a[0]) {
+        Ok(v) => v,
+        Err(err) => return fail(&err),
+    };
     let (key, query) = (&a[1], a[2..].join(" "));
     match mem.recall(scope, key, &query) {
         Ok(hits) => {
@@ -185,15 +239,15 @@ fn cmd_list(mem: &AgentMemory, a: &[String]) -> ExitCode {
     if a.len() < 2 {
         return fail("用法: list <scope> <key> [type]");
     }
-    let scope = parse_scope(&a[0]).unwrap_or_else(|| {
-        eprintln!("无效 scope: {}", a[0]);
-        std::process::exit(1);
-    });
+    let scope = match parse_scope_arg(&a[0]) {
+        Ok(v) => v,
+        Err(err) => return fail(&err),
+    };
     let ty = if a.len() >= 3 {
-        Some(parse_type(&a[2]).unwrap_or_else(|| {
-            eprintln!("无效 type: {}", a[2]);
-            std::process::exit(1);
-        }))
+        Some(match parse_type_arg(&a[2]) {
+            Ok(v) => v,
+            Err(err) => return fail(&err),
+        })
     } else {
         None
     };
@@ -235,10 +289,10 @@ fn cmd_supersede(mem: &AgentMemory, a: &[String]) -> ExitCode {
     if a.len() < 4 {
         return fail("用法: supersede <scope> <key> <id> <text...>");
     }
-    let scope = parse_scope(&a[0]).unwrap_or_else(|| {
-        eprintln!("无效 scope: {}", a[0]);
-        std::process::exit(1);
-    });
+    let scope = match parse_scope_arg(&a[0]) {
+        Ok(v) => v,
+        Err(err) => return fail(&err),
+    };
     let id: i64 = match a[2].parse() {
         Ok(v) => v,
         Err(_) => return fail("id 必须是整数"),
@@ -272,10 +326,10 @@ fn cmd_consolidate(mem: &AgentMemory, a: &[String]) -> ExitCode {
     if a.len() < 2 {
         return fail("用法: consolidate <scope> <key> [threshold]");
     }
-    let scope = parse_scope(&a[0]).unwrap_or_else(|| {
-        eprintln!("无效 scope: {}", a[0]);
-        std::process::exit(1);
-    });
+    let scope = match parse_scope_arg(&a[0]) {
+        Ok(v) => v,
+        Err(err) => return fail(&err),
+    };
     let threshold: f32 = if a.len() >= 3 {
         match a[2].parse() {
             Ok(v) => v,
@@ -297,10 +351,10 @@ fn cmd_stats(mem: &AgentMemory, a: &[String]) -> ExitCode {
     if a.len() < 2 {
         return fail("用法: stats <scope> <key>");
     }
-    let scope = parse_scope(&a[0]).unwrap_or_else(|| {
-        eprintln!("无效 scope: {}", a[0]);
-        std::process::exit(1);
-    });
+    let scope = match parse_scope_arg(&a[0]) {
+        Ok(v) => v,
+        Err(err) => return fail(&err),
+    };
     match mem.stats(scope, &a[1]) {
         Ok(MemoryStats {
             working,
@@ -348,7 +402,10 @@ fn cmd_graph(mem: &AgentMemory, a: &[String]) -> ExitCode {
             if a.len() < 2 {
                 return fail("用法: graph neighbors <entity> [depth]");
             }
-            let depth = a.get(2).and_then(|d| d.parse().ok()).unwrap_or(1);
+            let depth = match parse_depth_arg(a.get(2).map(String::as_str), 1, "depth") {
+                Ok(v) => v,
+                Err(err) => return fail(&format!("neighbors 参数错误: {err}")),
+            };
             match mem.graph_neighbors(&a[1], depth) {
                 Ok(edges) => {
                     if edges.is_empty() {
@@ -366,7 +423,10 @@ fn cmd_graph(mem: &AgentMemory, a: &[String]) -> ExitCode {
             if a.len() < 3 {
                 return fail("用法: graph path <from> <to> [max_depth]");
             }
-            let depth = a.get(3).and_then(|d| d.parse().ok()).unwrap_or(3);
+            let depth = match parse_depth_arg(a.get(3).map(String::as_str), 3, "max_depth") {
+                Ok(v) => v,
+                Err(err) => return fail(&format!("path 参数错误: {err}")),
+            };
             match mem.graph_paths(&a[1], &a[2], depth) {
                 Ok(paths) => {
                     if paths.is_empty() {
@@ -511,4 +571,53 @@ fn cmd_demo(mem: &AgentMemory) -> ExitCode {
 
     println!("==== 演示结束 ====");
     ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    #[test]
+    fn parse_db_arg_supports_flags() {
+        let mut args = vec!["--db".to_string(), "cli.db".to_string(), "add".to_string()];
+        assert_eq!(parse_db_arg(&mut args).as_deref().unwrap(), "cli.db");
+        assert_eq!(args, vec!["add"]);
+
+        let mut args = vec![
+            "add".to_string(),
+            "--db=db2.db".to_string(),
+            "x".to_string(),
+        ];
+        assert_eq!(parse_db_arg(&mut args).as_deref().unwrap(), "db2.db");
+        assert_eq!(args, vec!["add", "x"]);
+    }
+
+    #[test]
+    fn parse_db_arg_falls_back_to_env() {
+        let old = env::var_os("AGENT_MEMORY_DB");
+        env::set_var("AGENT_MEMORY_DB", "env-memory.db");
+        let mut args = vec!["graph".to_string(), "stats".to_string()];
+        assert_eq!(parse_db_arg(&mut args).as_deref().unwrap(), "env-memory.db");
+        assert_eq!(args, vec!["graph", "stats"]);
+        if let Some(v) = old {
+            env::set_var("AGENT_MEMORY_DB", v);
+        } else {
+            env::remove_var("AGENT_MEMORY_DB");
+        }
+    }
+
+    #[test]
+    fn parse_db_arg_missing_value() {
+        let mut args = vec!["add".to_string(), "--db".to_string()];
+        assert!(parse_db_arg(&mut args).is_err());
+    }
+
+    #[test]
+    fn parse_depth_arg_strict_validation() {
+        assert_eq!(parse_depth_arg(Some("3"), 1, "depth").unwrap(), 3);
+        assert!(parse_depth_arg(Some("0"), 1, "depth").is_err());
+        assert!(parse_depth_arg(Some("abc"), 1, "depth").is_err());
+        assert_eq!(parse_depth_arg(None, 2, "depth").unwrap(), 2);
+    }
 }

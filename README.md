@@ -15,6 +15,7 @@
 ```
 cargo add agent-memory   # 作为库
 cargo run -- demo        # 作为 CLI 演示
+cargo run --example demo # 运行示例程序
 ```
 
 ## 它解决什么问题
@@ -100,7 +101,7 @@ let (hits, edges) = mem.recall_with_graph(Scope::User, "u-1", "用户会什么")
 
 ```bash
 export AGENT_MEMORY_DB=./agent-memory.db
-agent-memory add user dev semantic 用户喜欢用 Rust 写 Agent 应用
+agent-memory --db ./agent-memory.db add user dev semantic 用户喜欢用 Rust 写 Agent 应用
 agent-memory recall user dev 用户喜欢什么语言
 agent-memory list user dev
 agent-memory stats user dev
@@ -250,7 +251,8 @@ cargo test                           # 全部测试（单元 + 集成 + 文档�
 cargo test --all-features            # 含可选 http feature 的测试
 cargo clippy --all-targets --all-features -- -D warnings   # 零警告
 cargo fmt
-cargo run --example demo             # 端到端演示（含知识图谱多跳推理）
+cargo run -- demo                     # CLI 端到端演示（含知识图谱多跳推理）
+cargo run --example demo             # 示例程序演示（可选）
 ```
 
 更多开发约定见 [CONTRIBUTING.md](./CONTRIBUTING.md)，版本变更见 [CHANGELOG.md](./CHANGELOG.md)。

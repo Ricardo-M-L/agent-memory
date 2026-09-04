@@ -16,7 +16,7 @@ cargo build                       # 默认构建（无网络依赖）
 cargo test                        # 全部测试（单元 + 集成）
 cargo test --all-features         # 含可选 http feature 的测试
 cargo run -- demo                 # 端到端演示
-cargo run -- example              # 快速示例
+cargo run --example demo -- demo.db # 示例程序（可选）
 cargo run -- graph stats          # CLI：图谱统计
 
 cargo fmt                         # 格式化（提交前必跑）
