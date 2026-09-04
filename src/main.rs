@@ -23,6 +23,7 @@
 //!   graph merge <keep> <alias>              合并别名实体（实体消歧）
 //!   graph stats                             图谱统计摘要
 //!   demo                                    运行端到端演示
+//!   version                                 打印版本号
 //!   help                                    帮助
 //!
 //! 数据库路径默认 ./agent-memory.db，可通过环境变量 AGENT_MEMORY_DB 指定，或通过 --db 覆盖。
@@ -46,6 +47,18 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    match args[0].as_str() {
+        "help" | "-h" | "--help" => {
+            print_help();
+            return ExitCode::SUCCESS;
+        }
+        "version" | "-V" | "--version" => {
+            print_version();
+            return ExitCode::SUCCESS;
+        }
+        _ => {}
+    }
+
     let mem = match AgentMemory::open(&db) {
         Ok(m) => m,
         Err(e) => {
@@ -65,10 +78,6 @@ fn main() -> ExitCode {
         "stats" => cmd_stats(&mem, &args[1..]),
         "graph" => cmd_graph(&mem, &args[1..]),
         "demo" => cmd_demo(&mem),
-        "help" | "-h" | "--help" => {
-            print_help();
-            ExitCode::SUCCESS
-        }
         other => {
             eprintln!("未知命令: {other}\n");
             print_help();
@@ -99,9 +108,15 @@ fn print_help() {
          \x20 graph communities                       社区发现（弱连通分量）\n\
          \x20 graph merge <keep> <alias>              合并别名实体（消歧）\n\
          \x20 graph stats                             图谱统计摘要\n\
-         \x20 demo                                    端到端演示\n\n\
+         \x20 demo                                    端到端演示\n\
+         \x20 version                                 打印版本号\n\
+         \x20 -V / --version                         打印版本号\n\n\
          数据库: 默认 ./agent-memory.db，可用环境变量 AGENT_MEMORY_DB 或 --db/-d 指定"
     );
+}
+
+fn print_version() {
+    println!("agent-memory {}", env!("CARGO_PKG_VERSION"));
 }
 
 fn parse_db_arg(args: &mut Vec<String>) -> Result<String, String> {
@@ -511,55 +526,96 @@ fn cmd_demo(mem: &AgentMemory) -> ExitCode {
 
     println!("==== agent-memory 端到端演示 ====\n");
     println!("[1] 写入语义事实与情景事件...");
-    mem.remember_fact(Scope::User, "dev", "用户喜欢用 Rust 编写 Agent 应用")
-        .unwrap();
-    mem.remember_fact(Scope::User, "dev", "用户正在准备 AI 工程师面试")
-        .unwrap();
-    mem.remember_event(Scope::User, "dev", "上周用户完成了知识图谱 Neo4j 的学习")
-        .unwrap();
-    mem.remember_event(Scope::User, "dev", "用户关注 gRPC 与 HTTP 的性能对比")
-        .unwrap();
-    mem.add(
+    if let Err(e) = mem.remember_fact(Scope::User, "dev", "用户喜欢用 Rust 编写 Agent 应用")
+    {
+        return fail(&format!("写入演示记忆失败: {e}"));
+    }
+    if let Err(e) = mem.remember_fact(Scope::User, "dev", "用户正在准备 AI 工程师面试") {
+        return fail(&format!("写入演示记忆失败: {e}"));
+    }
+    if let Err(e) = mem.remember_event(Scope::User, "dev", "上周用户完成了知识图谱 Neo4j 的学习")
+    {
+        return fail(&format!("写入演示记忆失败: {e}"));
+    }
+    if let Err(e) = mem.remember_event(Scope::User, "dev", "用户关注 gRPC 与 HTTP 的性能对比")
+    {
+        return fail(&format!("写入演示记忆失败: {e}"));
+    }
+    if let Err(e) = mem.add(
         Scope::User,
         "dev",
         MemoryType::Working,
         "当前会话：研究 agent 记忆系统设计",
-    )
-    .unwrap();
+    ) {
+        return fail(&format!("写入演示记忆失败: {e}"));
+    }
     println!("已写入 5 条记忆\n");
 
     println!("[2] 检索 '用户喜欢什么语言'...");
-    for h in mem.recall(Scope::User, "dev", "用户喜欢什么语言").unwrap() {
+    let hits = match mem.recall(Scope::User, "dev", "用户喜欢什么语言") {
+        Ok(hits) => hits,
+        Err(e) => return fail(&format!("检索演示记忆失败: {e}")),
+    };
+    for h in hits {
         println!("   score={:.3}  {}", h.score, h.item.content);
     }
     println!();
 
     println!("[3] 冲突解决：'用户喜欢 Go' 取代旧事实...");
-    let old = mem.recall(Scope::User, "dev", "Rust").unwrap()[0]
-        .item
-        .clone();
-    mem.supersede(Scope::User, "dev", old.id, "用户喜欢用 Go 编写 Agent 应用")
-        .unwrap();
+    let old = match mem.recall(Scope::User, "dev", "Rust") {
+        Ok(items) => items,
+        Err(e) => return fail(&format!("演示检索记忆失败: {e}")),
+    }
+    .first()
+    .cloned()
+    .map(|h| h.item);
+    if old.is_none() {
+        return fail("未找到可替代记忆: Rust");
+    }
+    let old = old.unwrap();
+    if let Err(e) = mem.supersede(Scope::User, "dev", old.id, "用户喜欢用 Go 编写 Agent 应用")
+    {
+        return fail(&format!("取代演示记忆失败: {e}"));
+    }
     println!("   #{old} 已标记为 superseded\n", old = old.id);
 
     println!("[4] 统计:");
-    let s = mem.stats(Scope::User, "dev").unwrap();
+    let s = match mem.stats(Scope::User, "dev") {
+        Ok(s) => s,
+        Err(e) => return fail(&format!("统计演示记忆失败: {e}")),
+    };
     println!(
         "   working={} episodic={} semantic={} superseded={} total={}\n",
         s.working, s.episodic, s.semantic, s.superseded, s.total
     );
 
     println!("[5] 知识图谱：写入实体关系并做多跳推理...");
-    mem.remember_relation("用户", "使用", "Rust").unwrap();
-    mem.remember_relation("Rust", "适合", "系统编程").unwrap();
-    mem.remember_relation("用户", "研究", "知识图谱").unwrap();
-    mem.replace_relation("用户", "住在", "北京").unwrap();
+    if let Err(e) = mem.remember_relation("用户", "使用", "Rust") {
+        return fail(&format!("写入演示关系失败: {e}"));
+    }
+    if let Err(e) = mem.remember_relation("Rust", "适合", "系统编程") {
+        return fail(&format!("写入演示关系失败: {e}"));
+    }
+    if let Err(e) = mem.remember_relation("用户", "研究", "知识图谱") {
+        return fail(&format!("写入演示关系失败: {e}"));
+    }
+    if let Err(e) = mem.replace_relation("用户", "住在", "北京") {
+        return fail(&format!("写入演示关系失败: {e}"));
+    }
     println!("   用户的 2 跳邻居:");
-    for e in mem.graph_neighbors("用户", 2).unwrap() {
+    let neighbors = match mem.graph_neighbors("用户", 2) {
+        Ok(neighbors) => neighbors,
+        Err(e) => return fail(&format!("查询演示关系失败: {e}")),
+    };
+    for e in neighbors {
         println!("     - {}", e.display());
     }
     println!("   路径 用户 -> 系统编程:");
-    for path in mem.graph_paths("用户", "系统编程", 2).unwrap() {
+    let paths = match mem.graph_paths("用户", "系统编程", 2) {
+        Ok(paths) => paths,
+        Err(e) => return fail(&format!("路径演示查询失败: {e}")),
+    };
+    for path in paths {
         let chain = path
             .iter()
             .map(|e| format!("{} -{}-> {}", e.subject, e.predicate, e.object))

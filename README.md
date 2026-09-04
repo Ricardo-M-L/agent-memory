@@ -119,6 +119,8 @@ agent-memory graph merge Rust Rust语言       # 把别名「Rust语言」合并
 agent-memory graph stats                     # 实体/边/社区统计
 agent-memory graph edges --all                # 含已失效边
 agent-memory demo      # 端到端演示
+agent-memory --version
+agent-memory help
 ```
 
 ## 架构
