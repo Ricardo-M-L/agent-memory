@@ -37,6 +37,8 @@ pub mod embed;
 pub mod extract;
 pub mod graph;
 pub mod memory;
+#[cfg(feature = "neo4j")]
+pub mod neo4j;
 pub mod retrieval;
 pub mod sqlite_store;
 pub mod store;
@@ -54,5 +56,7 @@ pub use extract::{
 };
 pub use graph::{Edge, Entity, GraphStats, GraphStore, SqliteGraphStore, Triple};
 pub use memory::{AgentMemory, MemoryStats, TimeRange};
+#[cfg(feature = "neo4j")]
+pub use neo4j::{Neo4jAuth, Neo4jGraphConfig, Neo4jGraphStore};
 pub use retrieval::{RetrievalConfig, ScoredMemory};
 pub use store::{MemoryStore, StoreError, StoreResult};

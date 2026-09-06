@@ -238,6 +238,40 @@ let v = emb.embed("一段文本")?;
 > 传输层抽象为 `HttpTransport`（默认 `ureq`+rustls，无需系统 OpenSSL），可注入 mock 或
 > 其他 HTTP 客户端；**不启用 `http` feature 时，整个库零网络依赖**。
 
+### 可选 `neo4j` feature：接入 Neo4j 图数据库
+
+节点和关系存入独立的 Neo4j 服务，通过 HTTP Query API 连接；可以连接本机服务或远程
+单机实例。默认仍使用 SQLite。此特性尚未发布到 crates.io，先使用 Git 依赖：
+
+```toml
+[dependencies]
+agent-memory = { git = "https://github.com/Ricardo-M-L/agent-memory", features = ["neo4j"] }
+```
+
+```rust
+use std::sync::Arc;
+use agent_memory::{AgentMemory, Neo4jGraphConfig, Neo4jGraphStore, RuleExtractor};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let graph = Neo4jGraphStore::connect(
+        Neo4jGraphConfig::basic("http://localhost:7474", "neo4j", std::env::var("NEO4J_PASSWORD")?)
+            .with_database("neo4j")
+            .with_namespace("my-agent"),
+    )?;
+    let _mem = AgentMemory::open("agent-memory.db")?
+        .with_graph(Arc::new(graph))
+        .with_extractor(Arc::new(RuleExtractor::new()));
+    Ok(())
+}
+```
+
+完整的 [启动、可视化、测试和使用边界](docs/neo4j.md)，以及可直接运行的
+[Neo4j 示例](examples/neo4j.rs)。支持实体/关系、时间失效、多跳路径、社区、实体合并和统计。
+
+> 图谱按 `namespace` 隔离，**不会自动继承记忆的 user/session/agent 作用域**；多租户需由
+> 应用选择独立的后端实例与命名空间。记忆正文仍在 SQLite，与 Neo4j 写入不构成跨库事务。
+> 切换后端不会自动迁移已有 SQLite 图谱；当前 CLI 的 `graph` 命令仍使用 SQLite。
+
 ### 自定义图谱后端 / 摘要器
 
 实现 `GraphStore` trait 即可换成 Neo4j 等真实图数据库（邻居、路径、社区、合并、统计等
@@ -250,7 +284,7 @@ let v = emb.embed("一段文本")?;
 ```bash
 cargo build                          # 编译（首次会编译 bundled SQLite）
 cargo test                           # 全部测试（单元 + 集成 + 文档）
-cargo test --all-features            # 含可选 http feature 的测试
+cargo test --all-features            # 含可选 HTTP/Neo4j 离线测试；真实 Neo4j 测试见 docs/neo4j.md
 cargo clippy --all-targets --all-features -- -D warnings   # 零警告
 cargo fmt
 cargo run -- demo                     # CLI 端到端演示（含知识图谱多跳推理）
@@ -269,6 +303,7 @@ cargo run --example demo             # 示例程序演示（可选）
 - [x] 社区发现 / 实体消歧合并 / 图谱统计摘要
 - [x] 注入式 LLM 抽取器（`LlmExtractor` + `ChatClient`，不绑定网络库）
 - [x] HTTP 嵌入后端（OpenAI / BGE 兼容，`features=["http"]`，默认不启用）
+- [x] Neo4j 图谱后端（`features=["neo4j"]`，默认不启用）
 - [ ] LLM 摘要器的内置实现（`Summarizer` trait 已就绪）
 - [ ] 持久化并发优化（连接池 / WAL 调优）
 - [ ] `cargo publish` 到 crates.io

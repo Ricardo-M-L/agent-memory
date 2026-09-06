@@ -32,7 +32,42 @@ jobs:
       - name: Run tests (all features)
         run: cargo test --all-features
 
+      - name: Run tests (default features, offline core)
+        run: cargo test
+
       - name: Build docs
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --all-features --no-deps
+
+  neo4j:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      neo4j:
+        image: neo4j:5.26.30
+        env:
+          NEO4J_AUTH: neo4j/agent-memory-ci-only
+          NEO4J_server_memory_heap_initial__size: 256m
+          NEO4J_server_memory_heap_max__size: 512m
+          NEO4J_server_memory_pagecache_size: 128m
+        ports:
+          - 7474:7474
+          - 7687:7687
+        options: >-
+          --health-cmd "wget -q --spider http://localhost:7474/ || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ runner.os }}-neo4j
+      - name: Real Neo4j contract and concurrency tests
+        env:
+          NEO4J_ENDPOINT: http://localhost:7474
+          NEO4J_PASSWORD: agent-memory-ci-only
+          NEO4J_TEST_ALLOW_WRITE: "1"
+        run: cargo test --all-features --test neo4j_integration -- --ignored

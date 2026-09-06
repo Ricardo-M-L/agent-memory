@@ -2,6 +2,21 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 图谱后端
+- 新增 `neo4j` feature：实现可选 `Neo4jGraphStore`，通过 Neo4j HTTP Query API
+  提供完整 `GraphStore` 实现（add/replace/list/邻居/路径/社区/合并/统计），用于替换默认
+  SQLite 图谱后端。
+- 增加命名空间隔离、数据库端写锁、持久化 ID、原子关系更新与实体合并。
+- 增加 `Neo4jGraphConfig`（Basic/Bearer 认证、数据库、超时、响应大小限制）与凭据脱敏。
+- 增加真实 Neo4j 集成测试、独立 CI 服务任务、可运行示例和启动/可视化文档。
+
+### 修复
+- SQLite 的实体更新、关系失效与插入改为同一个事务，避免失败或并发下部分写入。
+- `replace_triple` 可恢复已失效的同一事实；重复有效事实保留 ID 与来源，修复实体计数翻倍。
+- 两个后端统一拒绝空三元组和非有限/越界置信度，重复有效事实可提升置信度。
+
 ## [0.1.0] - 2026-09-03
 
 首个开源版本：离线优先、零外部服务、零 API key 即可运行的 LLM Agent 记忆层。

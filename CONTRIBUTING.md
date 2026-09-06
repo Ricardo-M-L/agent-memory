@@ -14,7 +14,7 @@
 ```bash
 cargo build                       # 默认构建（无网络依赖）
 cargo test                        # 全部测试（单元 + 集成）
-cargo test --all-features         # 含可选 http feature 的测试
+cargo test --all-features         # 含可选 HTTP/Neo4j 离线测试
 cargo run -- demo                 # 端到端演示
 cargo run --example demo -- demo.db # 示例程序（可选）
 cargo run -- graph stats          # CLI：图谱统计
@@ -34,6 +34,9 @@ PR 必须在**最新 stable** 上同时满足：
 4. 为新逻辑补测试（纯函数单测 + 涉及 SQLite 的逻辑走集成测试 / `:memory:`）；
 5. 公共项都有 `///` 文档注释，`cargo doc` 无警告。
 
+修改 Neo4j 查询或事务逻辑时，还需运行 [真实 Neo4j 集成测试](docs/neo4j.md#测试)。
+普通 `cargo test --all-features` 会显式忽略这些需要外部服务的测试，CI 有独立任务执行。
+
 ## 架构速览
 
 | 模块 | 职责 |
@@ -50,13 +53,14 @@ PR 必须在**最新 stable** 上同时满足：
 | `summarizer.rs` | 抽取式摘要 |
 | `memory.rs` | `AgentMemory` 门面，串联以上全部能力 |
 | `http_embed.rs` | **可选 `http` feature**：OpenAI 兼容嵌入器 |
+| `neo4j.rs` / `neo4j/*.cypher` | **可选 `neo4j` feature**：Query API 后端、命名空间和原子写入 |
 
 ### 设计红线（务必遵守）
 
 - **离线优先**：默认构建不得引入任何网络 / 外部服务 / API key。任何联网能力必须放进
   可选 feature（如 `http`），或通过注入式 trait（如 `ChatClient`、`HttpTransport`）
   由调用方提供，保证核心库零网络依赖。
-- **不引入重型图数据库**：知识图谱保持在嵌入式 SQLite 内实现。
+- **默认轻量**：默认知识图谱保持嵌入式 SQLite；Neo4j 等外部服务只能作为显式启用的可选后端。
 - **可追溯而非静默覆盖**：事实变更用 `superseded` / `invalidated_at` 留痕，不物理删除历史。
 - **多值与单值关系分开**：`add_triple` 允许多值共存，`replace_triple` 才表示单值事实变更。
 

@@ -15,11 +15,15 @@ documentation = "https://docs.rs/agent-memory"
 default = []
 # 启用 OpenAI 兼容的 HTTP 嵌入器（引入 ureq/rustls）。默认关闭，保证离线零网络依赖。
 http = ["dep:ureq"]
+# 启用 Neo4j 图谱后端（复用可选的 ureq/http 基础）；默认关闭。
+neo4j = ["http", "dep:base64", "dep:url"]
 
 [dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = { version = "0.22", optional = true }
+url = { version = "2", optional = true }
 ureq = { version = "2", optional = true, default-features = false, features = ["json", "rustls"] }
 
 [lib]
@@ -29,6 +33,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "agent-memory"
 path = "src/main.rs"
+
+[[example]]
+name = "neo4j"
+required-features = ["neo4j"]
 
 [profile.release]
 lto = "thin"
