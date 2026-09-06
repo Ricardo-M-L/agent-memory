@@ -101,6 +101,7 @@ pub trait GraphStore: Send + Sync {
     /// 新增一条三元组（多值关系，如「喜欢」「使用」可同时指向多个客体）。
     ///
     /// 同 `(s,p,o)` 已存在则幂等返回原 id；**不会**失效其他客体的边。
+    /// 已失效的同一三元组不会被恢复；有效边可提升置信度，保留原来源与创建时间。
     fn add_triple(
         &self,
         triple: &Triple,
@@ -112,6 +113,8 @@ pub trait GraphStore: Send + Sync {
     ///
     /// 同一 `(subject,predicate)` 指向其他客体的旧有效边会被标记失效（可追溯），
     /// 再写入新边。适用于事实随时间变化的场景。
+    /// 若目标边曾失效，恢复原 id，并更新为本次来源、时间和置信度。
+    /// 每个三元组只保留一条记录，不是完整的逐次变更日志。
     fn replace_triple(
         &self,
         triple: &Triple,
@@ -156,27 +159,54 @@ pub struct SqliteGraphStore {
 }
 
 impl SqliteGraphStore {
-    /// 幂等插入一条边（不失效其他边）。
-    fn insert_triple(
+    /// 实体更新、旧边失效和目标边写入必须在同一个事务中完成。
+    fn write_triple(
         &self,
         triple: &Triple,
         source_memory_id: Option<i64>,
         now: i64,
+        replace: bool,
     ) -> StoreResult<i64> {
-        let sid = self.upsert_entity(&triple.subject, now)?;
-        let oid = self.upsert_entity(&triple.object, now)?;
-        let conn = self.db.lock();
-        conn.execute(
-            "INSERT OR IGNORE INTO graph_edges \
+        if [&triple.subject, &triple.predicate, &triple.object]
+            .iter()
+            .any(|s| s.trim().is_empty())
+            || !triple.confidence.is_finite()
+            || !(0.0..=1.0).contains(&triple.confidence)
+        {
+            return Err(crate::store::StoreError::Other(
+                "三元组名称不能为空，置信度须为 [0,1] 内有限数值".into(),
+            ));
+        }
+        let mut conn = self.db.lock();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let sid = Self::upsert_entity(&tx, &triple.subject, now)?;
+        let oid = Self::upsert_entity(&tx, &triple.object, now)?;
+        let predicate = triple.predicate.trim();
+        if replace {
+            tx.execute(
+                "UPDATE graph_edges SET invalidated_at = ?1 WHERE subject_id = ?2 \
+                 AND predicate = ?3 AND object_id <> ?4 AND invalidated_at IS NULL",
+                params![now, sid, predicate, oid],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO graph_edges \
              (subject_id, predicate, object_id, source_memory_id, confidence, created_at, invalidated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
-            params![sid, triple.predicate, oid, source_memory_id, triple.confidence, now],
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL) \
+             ON CONFLICT(subject_id, predicate, object_id) DO UPDATE SET \
+               source_memory_id = CASE WHEN ?7 AND invalidated_at IS NOT NULL THEN excluded.source_memory_id ELSE source_memory_id END, \
+               created_at = CASE WHEN ?7 AND invalidated_at IS NOT NULL THEN excluded.created_at ELSE created_at END, \
+               confidence = CASE WHEN ?7 AND invalidated_at IS NOT NULL THEN excluded.confidence \
+                 WHEN invalidated_at IS NULL THEN MAX(confidence, excluded.confidence) ELSE confidence END, \
+               invalidated_at = CASE WHEN ?7 THEN NULL ELSE invalidated_at END",
+            params![sid, predicate, oid, source_memory_id, triple.confidence, now, replace],
         )?;
-        let id: i64 = conn.query_row(
+        let id: i64 = tx.query_row(
             "SELECT id FROM graph_edges WHERE subject_id = ?1 AND predicate = ?2 AND object_id = ?3",
-            params![sid, triple.predicate, oid],
+            params![sid, predicate, oid],
             |r| r.get(0),
         )?;
+        tx.commit()?;
         Ok(id)
     }
 
@@ -185,13 +215,13 @@ impl SqliteGraphStore {
     }
 
     /// upsert 实体并返回其 id（重复出现时 mention_count + 1）。
-    fn upsert_entity(&self, name: &str, now: i64) -> StoreResult<i64> {
+    fn upsert_entity(conn: &rusqlite::Connection, name: &str, now: i64) -> StoreResult<i64> {
         let name = name.trim();
-        let conn = self.db.lock();
         conn.execute(
             "INSERT INTO graph_entities(name, entity_type, first_seen, last_seen) \
              VALUES (?1, NULL, ?2, ?2) \
-             ON CONFLICT(name) DO UPDATE SET mention_count = mention_count + 1, last_seen = excluded.last_seen",
+             ON CONFLICT(name) DO UPDATE SET mention_count = mention_count + 1, \
+               first_seen = MIN(first_seen, excluded.first_seen), last_seen = MAX(last_seen, excluded.last_seen)",
             params![name, now],
         )?;
         let id: i64 = conn.query_row(
@@ -250,7 +280,7 @@ impl GraphStore for SqliteGraphStore {
         source_memory_id: Option<i64>,
         now: i64,
     ) -> StoreResult<i64> {
-        self.insert_triple(triple, source_memory_id, now)
+        self.write_triple(triple, source_memory_id, now, false)
     }
 
     fn replace_triple(
@@ -259,18 +289,7 @@ impl GraphStore for SqliteGraphStore {
         source_memory_id: Option<i64>,
         now: i64,
     ) -> StoreResult<i64> {
-        let sid = self.upsert_entity(&triple.subject, now)?;
-        let oid = self.upsert_entity(&triple.object, now)?;
-        // 时间冲突：同一主体同一单值关系、客体不同的旧有效边失效。
-        {
-            let conn = self.db.lock();
-            conn.execute(
-                "UPDATE graph_edges SET invalidated_at = ?1 \
-                 WHERE subject_id = ?2 AND predicate = ?3 AND object_id <> ?4 AND invalidated_at IS NULL",
-                params![now, sid, triple.predicate, oid],
-            )?;
-        }
-        self.insert_triple(triple, source_memory_id, now)
+        self.write_triple(triple, source_memory_id, now, true)
     }
 
     fn neighbors(&self, entity: &str, depth: usize) -> StoreResult<Vec<Edge>> {
@@ -678,6 +697,80 @@ mod tests {
     }
 
     #[test]
+    fn replace_reactivates_old_fact_and_preserves_duplicate_provenance() {
+        let g = store();
+        // SQLite 的来源 ID 有外键约束，使用实际存在的记忆记录。
+        for id in 1..=4 {
+            g.db.lock().execute(
+                "INSERT INTO memories (id, scope, scope_key, memory_type, content, importance, created_at, last_access_at) VALUES (?1, 'user', 'test', 'semantic', 'source', 0.5, 0, 0)",
+                params![id],
+            ).unwrap();
+        }
+        let old = Triple::new(" Alice ", " lives_in ", "Shanghai").with_confidence(0.6);
+        let id = g.replace_triple(&old, Some(1), 10).unwrap();
+        assert_eq!(g.replace_triple(&old, Some(2), 20).unwrap(), id);
+        assert_eq!(
+            g.entities()
+                .unwrap()
+                .iter()
+                .find(|e| e.name == "Alice")
+                .unwrap()
+                .mention_count,
+            2
+        );
+        assert_eq!(g.edges(false).unwrap()[0].source_memory_id, Some(1));
+        let new = Triple::new("Alice", "lives_in", "Beijing");
+        g.replace_triple(&new, Some(3), 30).unwrap();
+        assert_eq!(g.replace_triple(&old, Some(4), 40).unwrap(), id);
+        let edge = &g.edges(false).unwrap()[0];
+        assert_eq!(
+            (edge.id, edge.created_at, edge.source_memory_id),
+            (id, 40, Some(4))
+        );
+        g.add_triple(&new, None, 45).unwrap();
+        assert_eq!(g.edges(false).unwrap().len(), 1);
+        g.add_triple(&old.with_confidence(0.9), None, 50).unwrap();
+        assert_eq!(g.edges(false).unwrap()[0].confidence, 0.9);
+    }
+
+    #[test]
+    fn failed_replace_rolls_back_entities_and_invalidation() {
+        let g = store();
+        g.add_triple(&Triple::new("A", "p", "B"), None, 1).unwrap();
+        let before = (g.entities().unwrap(), g.edges(true).unwrap());
+        g.db.lock().execute_batch("CREATE TRIGGER reject_edge BEFORE INSERT ON graph_edges BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
+        assert!(g
+            .replace_triple(&Triple::new("A", "p", "C"), None, 2)
+            .is_err());
+        assert_eq!((g.entities().unwrap(), g.edges(true).unwrap()), before);
+    }
+
+    #[test]
+    fn concurrent_replacements_keep_one_active_fact() {
+        let db = Db::open(":memory:").unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|i| {
+                let g = SqliteGraphStore::from_db(db.clone());
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    for round in 0..4 {
+                        g.replace_triple(&Triple::new("A", "p", format!("B{i}")), None, round)
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for w in workers {
+            w.join().unwrap();
+        }
+        let g = SqliteGraphStore::from_db(db);
+        assert_eq!(g.edges(false).unwrap().len(), 1);
+        assert_eq!(g.edges(true).unwrap().len(), 8);
+    }
+
+    #[test]
     fn neighbors_undirected() {
         let g = store();
         g.add_triple(&Triple::new("用户", "喜欢", "Rust"), None, 1)
@@ -733,7 +826,7 @@ mod tests {
         g.add_triple(&Triple::new("a", "r", "b"), None, 1).unwrap();
         g.add_triple(&Triple::new("b", "r", "c"), None, 2).unwrap();
         g.add_triple(&Triple::new("d", "r", "e"), None, 3).unwrap();
-        g.upsert_entity("f", 4).unwrap();
+        SqliteGraphStore::upsert_entity(&g.db.lock(), "f", 4).unwrap();
 
         let comms = g.communities().unwrap();
         // 3 个社区，最大 3 个实体
