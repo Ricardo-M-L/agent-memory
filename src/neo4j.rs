@@ -223,29 +223,49 @@ impl Neo4jGraphStore {
     }
 
     /// 幂等初始化服务端约束和命名空间；失败时可以修复权限/连接后再次调用。
+    /// 并发初始化的服务端死锁最多重试三次；其他错误和普通数据写入不自动重试。
     pub fn initialize(&self) -> StoreResult<()> {
-        self.execute("CREATE CONSTRAINT agent_memory_graph_unique IF NOT EXISTS FOR (g:AgentMemoryGraph) REQUIRE g.name IS UNIQUE", json!({}))?;
-        self.execute("CREATE CONSTRAINT agent_memory_entity_unique IF NOT EXISTS FOR (n:AgentMemoryEntity) REQUIRE (n.namespace, n.name) IS UNIQUE", json!({}))?;
-        self.execute("MERGE (g:AgentMemoryGraph {name: $namespace}) ON CREATE SET g.next_id = 0 RETURN g.next_id", json!({}))?;
+        self.initialize_statement("CREATE CONSTRAINT agent_memory_graph_unique IF NOT EXISTS FOR (g:AgentMemoryGraph) REQUIRE g.name IS UNIQUE")?;
+        self.initialize_statement("CREATE CONSTRAINT agent_memory_entity_unique IF NOT EXISTS FOR (n:AgentMemoryEntity) REQUIRE (n.namespace, n.name) IS UNIQUE")?;
+        self.initialize_statement("MERGE (g:AgentMemoryGraph {name: $namespace}) ON CREATE SET g.next_id = 0 RETURN g.next_id")?;
         Ok(())
+    }
+
+    fn initialize_statement(&self, statement: &str) -> StoreResult<()> {
+        let mut retries = 0;
+        loop {
+            match self.execute(statement, json!({})) {
+                Ok(_) => return Ok(()),
+                Err(StoreError::Http(message)) if retries < 3 && message ==
+                    "Neo4j: query failed (Neo.TransientError.Transaction.DeadlockDetected)" => {
+                    // 服务端已回滚死锁事务，且这里只执行幂等初始化语句。
+                    std::thread::sleep(Duration::from_millis(50 << retries));
+                    retries += 1;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     fn execute(&self, statement: &str, mut parameters: Value) -> StoreResult<Vec<Vec<Value>>> {
         parameters["namespace"] = json!(self.namespace);
-        let response = self
+        let response = match self
             .client
             .post(&self.query_url)
             .set("Authorization", &self.auth.header())
             .set("Accept", "application/json")
             .send_json(json!({"statement": statement, "parameters": parameters}))
-            .map_err(|e| match e {
-                ureq::Error::Status(status, _) => protocol(format!("HTTP {status}")),
-                // 不回显 URL、凭据、查询参数或服务端原始数据。
-                ureq::Error::Transport(_) => protocol(
+        {
+            Ok(response) | Err(ureq::Error::Status(_, response)) => response,
+            // 不回显 URL、凭据、查询参数或服务端原始数据。
+            Err(ureq::Error::Transport(_)) => {
+                return Err(protocol(
                     "transport failed (connection/TLS/timeout); write outcome may be unknown",
-                ),
-            })?;
-        if response.status() != 202 && response.status() != 200 {
+                ))
+            }
+        };
+        let status = response.status();
+        if status != 202 && status != 200 && status < 400 {
             return Err(protocol(format!(
                 "unexpected HTTP status {}",
                 response.status()
@@ -262,8 +282,24 @@ impl Neo4jGraphStore {
                 "response exceeds configured size limit; write outcome may be unknown",
             ));
         }
-        let payload: Value =
-            serde_json::from_slice(&bytes).map_err(|_| protocol("invalid JSON response"))?;
+        let payload: Value = serde_json::from_slice(&bytes).map_err(|_| {
+            if status >= 400 {
+                protocol(format!("HTTP {status}"))
+            } else {
+                protocol("invalid JSON response")
+            }
+        })?;
+        if status >= 400 {
+            // Query API 的查询错误也可能使用 HTTP 400，保留已脱敏的错误码。
+            if payload
+                .get("errors")
+                .and_then(Value::as_array)
+                .is_some_and(|e| !e.is_empty())
+            {
+                return Self::parse_response(&payload);
+            }
+            return Err(protocol(format!("HTTP {status}")));
+        }
         Self::parse_response(&payload)
     }
 

@@ -41,6 +41,8 @@ cargo run --features neo4j --example neo4j
 因此需要建约束权限。部署时也可由管理员先调用 `connect`，运行账号使用
 `new(config)` 连接同一已初始化命名空间；普通读写不会重复执行建约束语句。
 `new` 仅校验配置，不验证服务器是否可达。
+并发冷启动时，Neo4j 可能因建约束锁竞争而中止一个事务；初始化遇到明确的
+`DeadlockDetected` 最多退避重试三次。认证失败、网络结果未知和普通数据写入不重试。
 
 - `(:AgentMemoryGraph {name, next_id})`：命名空间元数据与 ID 分配器。
 - `(:AgentMemoryEntity {namespace, name, id, entity_type, mention_count, first_seen, last_seen})`：实体。

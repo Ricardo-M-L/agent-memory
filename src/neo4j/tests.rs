@@ -4,49 +4,88 @@ use std::net::TcpListener;
 use std::thread;
 
 fn mock(status: u16, body: String, delay: Duration) -> (String, thread::JoinHandle<String>) {
+    mock_many(vec![(status, body, delay)])
+}
+
+fn mock_many(responses: Vec<(u16, String, Duration)>) -> (String, thread::JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     listener.set_nonblocking(true).unwrap();
     let handle = thread::spawn(move || {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        let mut stream = loop {
-            match listener.accept() {
-                Ok((stream, _)) => break stream,
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        && std::time::Instant::now() < deadline =>
-                {
-                    thread::sleep(Duration::from_millis(5))
+        let mut requests = String::new();
+        for (status, body, delay) in responses {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(5))
+                    }
+                    Err(e) => panic!("mock accept: {e}"),
                 }
-                Err(e) => panic!("mock accept: {e}"),
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut headers = String::new();
+            let mut len = 0;
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = value.trim().parse().unwrap();
+                }
+                headers.push_str(&line);
             }
-        };
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let mut headers = String::new();
-        let mut len = 0;
-        loop {
-            let mut line = String::new();
-            assert!(reader.read_line(&mut line).unwrap() > 0);
-            if line == "\r\n" {
-                break;
-            }
-            if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                len = value.trim().parse().unwrap();
-            }
-            headers.push_str(&line);
+            let mut request = vec![0; len];
+            reader.read_exact(&mut request).unwrap();
+            thread::sleep(delay);
+            let response = format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\nLocation: http://127.0.0.1:1/\r\n\r\n{body}", body.len());
+            // 超时测试中客户端会主动在响应前关闭连接。
+            let _ = stream.write_all(response.as_bytes());
+            requests.push_str(&format!(
+                "{headers}\r\n{}",
+                String::from_utf8(request).unwrap()
+            ));
         }
-        let mut request = vec![0; len];
-        reader.read_exact(&mut request).unwrap();
-        thread::sleep(delay);
-        let response = format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\nLocation: http://127.0.0.1:1/\r\n\r\n{body}", body.len());
-        // 超时测试中客户端会主动在响应前关闭连接。
-        let _ = stream.write_all(response.as_bytes());
-        format!("{headers}\r\n{}", String::from_utf8(request).unwrap())
+        requests
     });
     (endpoint, handle)
+}
+
+#[test]
+fn initialization_retries_only_confirmed_deadlocks_with_a_limit() {
+    let deadlock = json!({"errors":[{"code":"Neo.TransientError.Transaction.DeadlockDetected", "message":"private query text"}]}).to_string();
+    let success = json!({"data":{"fields":[],"values":[]}}).to_string();
+    let (endpoint, handle) = mock_many(vec![
+        (400, deadlock.clone(), Duration::ZERO),
+        (202, success.clone(), Duration::ZERO),
+        (202, success.clone(), Duration::ZERO),
+        (202, success, Duration::ZERO),
+    ]);
+    Neo4jGraphStore::connect(Neo4jGraphConfig::basic(endpoint, "u", "p")).unwrap();
+    assert_eq!(handle.join().unwrap().matches("POST /db/").count(), 4);
+    let (endpoint, handle) = mock_many(vec![(400, deadlock.clone(), Duration::ZERO); 4]);
+    let error = Neo4jGraphStore::connect(Neo4jGraphConfig::basic(endpoint, "u", "p"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("DeadlockDetected"));
+    assert!(!error.contains("private query text"));
+    assert_eq!(handle.join().unwrap().matches("POST /db/").count(), 4);
+    let (endpoint, handle) = mock(400, deadlock, Duration::ZERO);
+    let g = Neo4jGraphStore::new(Neo4jGraphConfig::basic(endpoint, "u", "p")).unwrap();
+    assert!(g.add_triple(&Triple::new("s", "p", "o"), None, 1).is_err());
+    assert_eq!(handle.join().unwrap().matches("POST /db/").count(), 1);
+    let (endpoint, handle) = mock(401, "{}".into(), Duration::ZERO);
+    assert!(Neo4jGraphStore::connect(Neo4jGraphConfig::basic(endpoint, "u", "p")).is_err());
+    assert_eq!(handle.join().unwrap().matches("POST /db/").count(), 1);
 }
 
 #[test]
