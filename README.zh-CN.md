@@ -13,6 +13,10 @@
 这是**早期 Rust 库 + CLI**，不是托管平台或自主 Agent。
 默认向量是特征哈希，**不是模型提供的语义嵌入**。
 
+[![SQLite 事实更新的真实输出摘录，以及两跳实体关系示意图](https://raw.githubusercontent.com/Ricardo-M-L/agent-memory/main/videos/agent-memory-launch/snapshots/frame-03-at-43.3s.png)](docs/fact-history.md)
+
+图中是可运行示例的真实输出摘录与 SQLite 关系示意，不是 Neo4j Browser 截图。
+
 ## 直接试用
 
 需要 Rust stable 和用于编译 bundled SQLite 的 C/C++ 工具链。
@@ -36,11 +40,11 @@ cargo run --example fact_history
 
 ## 接入 Rust 项目
 
-目前尚未发布到 crates.io，请先使用已测试的 Git revision：
+目前尚未发布到 crates.io，请先使用已测试的源码 Release：
 
 ```toml
 [dependencies]
-agent-memory = { git = "https://github.com/Ricardo-M-L/agent-memory", rev = "8166a5d9225cc8049616c1bc3b2720db714926c3" }
+agent-memory = { git = "https://github.com/Ricardo-M-L/agent-memory", tag = "v0.1.1" }
 ```
 
 ```rust

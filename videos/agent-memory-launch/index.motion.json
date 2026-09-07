@@ -1,0 +1,8 @@
+{
+  "duration": 60,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#headline-a", "bySec": 0.5 },
+    { "kind": "staysInFrame", "selector": "#output" },
+    { "kind": "staysInFrame", "selector": ".graph" }
+  ]
+}

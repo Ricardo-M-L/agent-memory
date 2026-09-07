@@ -14,6 +14,10 @@ invalidated edge. The default runtime needs no API key, model download or networ
 **Early-stage Rust library + CLI.** Not a hosted service, autonomous agent, or a complete
 temporal database. Default vectors use feature hashing, **not a semantic embedding model**.
 
+[![Checked SQLite fact-history output and an illustrated two-hop relationship](https://raw.githubusercontent.com/Ricardo-M-L/agent-memory/main/videos/agent-memory-launch/snapshots/frame-03-at-43.3s.png)](docs/fact-history.md)
+
+Illustrated SQLite result with real program-output excerpts, not a Neo4j Browser screenshot.
+
 ## Try it
 
 Requires Rust stable and a C/C++ build toolchain for bundled SQLite. The initial build downloads
@@ -48,11 +52,11 @@ the facts and calls the update APIs explicitly. [How it works](docs/fact-history
 
 ## Use it in your Rust application
 
-The package is not yet published to crates.io. Use the tested Git revision:
+The package is not yet published to crates.io. Use the tested source release:
 
 ```toml
 [dependencies]
-agent-memory = { git = "https://github.com/Ricardo-M-L/agent-memory", rev = "8166a5d9225cc8049616c1bc3b2720db714926c3" }
+agent-memory = { git = "https://github.com/Ricardo-M-L/agent-memory", tag = "v0.1.1" }
 ```
 
 ```rust

@@ -6,6 +6,7 @@ Cargo.lock
 .DS_Store
 **/node_modules/
 **/.hyperframes/
+videos/**/.thumbnails/
 **/.media/
 videos/**/out/
 videos/**/*.mp4

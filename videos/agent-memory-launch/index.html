@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1920, height=1080">
+  <title>agent-memory — facts change</title>
+  <script src="node_modules/gsap/dist/gsap.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; }
+    html, body { width: 1920px; height: 1080px; overflow: hidden; }
+    body { font-family: "Montserrat", sans-serif; color: #25231F; background: #F1EDE4; }
+    #root { position: relative; width: 1920px; height: 1080px; overflow: hidden; }
+    .clip { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .paper { position: absolute; inset: 0; background: #F1EDE4; }
+    .layout { position: relative; padding: 58px 80px 46px; height: 100%; display: flex; flex-direction: column; }
+    .meta { display: flex; justify-content: space-between; font: 24px "IBM Plex Mono", monospace; letter-spacing: 1px; }
+    .meta strong { color: #AE3F21; }
+    .heading { margin: 30px 0 34px; display: flex; align-items: end; justify-content: space-between; gap: 60px; }
+    h1 { font-size: 78px; font-weight: 900; line-height: 1.05; letter-spacing: -3px; width: 1000px; }
+    h1 span { display: block; opacity: 0; }
+    .intro { width: 580px; font-size: 28px; line-height: 1.5; }
+    .proof { display: grid; grid-template-columns: 1160px 540px; gap: 60px; flex: 1; min-height: 0; }
+    .terminal { background: #232620; color: #F1EDE4; padding: 34px 38px; display: flex; flex-direction: column; }
+    .terminal-label { font: 24px "IBM Plex Mono", monospace; padding-bottom: 23px; border-bottom: 2px solid #70685B; }
+    .command { font: 25px "IBM Plex Mono", monospace; margin-top: 26px; }
+    pre { font: 26px/1.7 "IBM Plex Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 25px; min-width: 1050px; min-height: 290px; }
+    .note { margin-top: auto; font: 24px/1.4 "IBM Plex Mono", monospace; }
+    .graph { display: flex; flex-direction: column; }
+    .graph-label { font: 24px "IBM Plex Mono", monospace; color: #AE3F21; margin-bottom: 27px; }
+    .node { border: 3px solid #25231F; padding: 19px 24px; font: 700 33px "IBM Plex Mono", monospace; }
+    .edge { padding: 13px 25px; font: 25px "IBM Plex Mono", monospace; }
+    .current { color: #AE3F21; border-color: #AE3F21; }
+    .history { margin-top: 25px; font: 24px/1.5 "IBM Plex Mono", monospace; min-height: 72px; white-space: pre-line; }
+    .graph-note { font-size: 24px; margin-top: auto; line-height: 1.35; }
+    footer { display: flex; justify-content: space-between; gap: 35px; margin-top: 30px; font: 24px "IBM Plex Mono", monospace; }
+    .progress-track { height: 6px; width: 100%; background: #70685B; margin-top: 25px; }
+    #progress { height: 6px; width: 100%; background: #AE3F21; transform-origin: left center; }
+    /* Explicit family declaration lets the compiler bundle the code font, too. */
+    .meta, .terminal-label, .command, pre, .note, .graph-label, .node, .edge, .history, footer {
+      font-family: "IBM Plex Mono", monospace;
+    }
+  </style>
+</head>
+<body>
+  <div data-hf-id="hf-qbnw" id="root" data-composition-id="main" data-start="0" data-duration="60" data-width="1920" data-height="1080">
+    <section data-hf-id="hf-ibs1" id="fact-history-scene" class="clip" data-start="0" data-duration="60" data-track-index="1">
+      <div data-hf-id="hf-2ava" class="paper"></div>
+      <div data-hf-id="hf-s2yi" class="layout">
+        <div data-hf-id="hf-puvz" class="meta"><strong data-hf-id="hf-5h01">agent-memory</strong><span data-hf-id="hf-vfur">RUST / SQLITE / LOCAL-FIRST</span><span data-hf-id="hf-n4h6" id="step-label">01 — THE PROBLEM</span></div>
+        <div data-hf-id="hf-had6" class="heading">
+          <h1 data-hf-id="hf-m3fm"><span data-hf-id="hf-gqi9" id="headline-a">Facts change.</span><span data-hf-id="hf-qhhr" id="headline-b">Memory should, too.</span></h1>
+          <p data-hf-id="hf-y82z" class="intro">Persistent facts and relationships for Rust agents. Start with SQLite. Add Neo4j when you need it.</p>
+        </div>
+        <div data-hf-id="hf-0nwy" class="proof">
+          <div data-hf-id="hf-1ms0" class="terminal">
+            <div data-hf-id="hf-flwc" class="terminal-label">CHECKED PROGRAM OUTPUT · EXCERPTS</div>
+            <div data-hf-id="hf-akt1" class="command">$ cargo run --example fact_history</div>
+            <pre data-hf-id="hf-kbfs" id="output">agent-memory | SQLite fact-history demo
+Real program output. Explicit application updates. No LLM or network calls.</pre>
+            <p data-hf-id="hf-irqw" class="note" id="note">Three processes. One fresh SQLite file.</p>
+          </div>
+          <div data-hf-id="hf-68ok" class="graph">
+            <div data-hf-id="hf-i3ue" class="graph-label">RELATIONSHIP STATE</div>
+            <div data-hf-id="hf-targ" class="node">alice</div>
+            <div data-hf-id="hf-qx93" class="edge">↓ lives_in</div>
+            <div data-hf-id="hf-mm22" class="node current" id="city">beijing</div>
+            <div data-hf-id="hf-t6tm" id="country-group" style="opacity:0">
+              <div data-hf-id="hf-83lk" class="edge">↓ located_in</div>
+              <div data-hf-id="hf-wben" class="node">china</div>
+            </div>
+            <p data-hf-id="hf-4wkv" class="history" id="history">Application supplies the fact.</p>
+            <p data-hf-id="hf-n70j" class="graph-note">Illustration of the SQLite result. Not a Neo4j Browser screenshot.</p>
+          </div>
+        </div>
+        <footer data-hf-id="hf-d3ia"><span data-hf-id="hf-dcsp">github.com/Ricardo-M-L/agent-memory</span><span data-hf-id="hf-qg3n">MIT · EARLY STAGE · NO MODEL REQUIRED</span></footer>
+        <div data-hf-id="hf-lxwj" class="progress-track"><div data-hf-id="hf-o6ww" id="progress"></div></div>
+      </div>
+    </section>
+  </div>
+  <script>
+    // These excerpts are checked against the executable by scripts/check-launch.mjs.
+    const SEQUENCE = [
+      { t: 0, label: "01 — THE PROBLEM", city: "beijing", history: "Application supplies the fact.", note: "Three processes. One fresh SQLite file.", text: "agent-memory | SQLite fact-history demo\nReal program output. Explicit application updates. No LLM or network calls." },
+      { t: 10, label: "02 — STORE", city: "beijing", history: "Current relationship: Beijing.", note: "Process 1 exits after writing to disk.", text: "PROCESS 1 | Store a fact\n  memory: Alice lives in Beijing\n  active: alice -lives_in-> beijing" },
+      { t: 24, label: "03 — UPDATE", city: "shanghai", history: "beijing · invalidated\nThe old edge is still inspectable.", note: "Explicit calls: supersede + replace_relation.", text: "PROCESS 2 | Reopen the database and update\n  memory: Alice lives in Shanghai\n  invalidated: alice -lives_in-> beijing\n  active: alice -lives_in-> shanghai" },
+      { t: 39, label: "04 — REOPEN", city: "shanghai", history: "beijing · invalidated\nPath: alice → shanghai → china.", note: "The third process asserts persistence and history.", text: "PROCESS 3 | Reopen again and verify\n  recall: Alice lives in Shanghai\n  path: alice -lives_in-> shanghai / shanghai -located_in-> china\n  history: 1 superseded memory, 1 invalidated relation" },
+      { t: 53, label: "05 — TRY IT", city: "shanghai", history: "SQLite by default.\nNeo4j is an optional graph backend.", note: "No automatic contradiction detection or full event log.", text: "PASS | Persistence, replacement, history and two-hop traversal verified" }
+    ];
+    const output = document.getElementById("output");
+    const label = document.getElementById("step-label");
+    const city = document.getElementById("city");
+    const history = document.getElementById("history");
+    const note = document.getElementById("note");
+    const driver = { t: 0 };
+    const tl = gsap.timeline({ paused: true });
+    tl.set("#headline-a", { opacity: 1, y: 70 }, 0.08);
+    tl.to("#headline-a", { y: 0, duration: 0.2, ease: "power4.out" }, 0.08);
+    tl.set("#headline-b", { opacity: 1, y: 44 }, 0.26);
+    tl.to("#headline-b", { y: 0, duration: 0.15, ease: "expo.out" }, 0.26);
+    tl.to(driver, { t: 60, duration: 60, ease: "none", onUpdate: () => {
+      const state = [...SEQUENCE].reverse().find(s => driver.t >= s.t) || SEQUENCE[0];
+      output.textContent = state.text;
+      label.textContent = state.label;
+      city.textContent = state.city;
+      history.textContent = state.history;
+      note.textContent = state.note;
+    } }, 0);
+    tl.fromTo("#progress", { scaleX: 0 }, { scaleX: 1, duration: 60, ease: "none" }, 0);
+    tl.set("#country-group", { opacity: 1 }, 39);
+    window.__timelines = window.__timelines || {};
+    window.__timelines["main"] = tl;
+  </script>
+</body>
+</html>

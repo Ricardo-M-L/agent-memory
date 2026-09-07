@@ -43,6 +43,12 @@ jobs:
       - name: Verify source package
         run: cargo package
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify launch snippets and links (no browser or model calls)
+        run: node scripts/check-launch.mjs
+
       - name: Build docs
         env:
           RUSTDOCFLAGS: "-D warnings"
