@@ -473,4 +473,114 @@ mod tests {
         let ex = LlmExtractor::new(|_: &str| Err("network down".to_string()));
         assert!(ex.extract("文本").is_empty());
     }
+
+    #[test]
+    fn rule_extractor_behavior_matrix() {
+        struct TestCase {
+            category: &'static str,
+            input: &'static str,
+            expected: Option<(&'static str, &'static str, &'static str)>,
+        }
+
+        let cases = [
+            // Whitespace & sentence-final punctuation
+            TestCase {
+                category: "leading and trailing whitespace",
+                input: "   Alice lives in Beijing   ",
+                expected: Some(("alice", "lives_in", "beijing")),
+            },
+            TestCase {
+                category: "sentence-final period",
+                input: "Alice lives in Beijing.",
+                expected: Some(("alice", "lives_in", "beijing")),
+            },
+            TestCase {
+                category: "repeated exclamation and question marks",
+                input: "Alice likes Rust!!!???",
+                expected: Some(("alice", "likes", "rust")),
+            },
+            TestCase {
+                category: "Chinese full-width punctuation",
+                input: "  张三喜欢喝乌龙茶！！！  ",
+                expected: Some(("张三", "喜欢", "乌龙茶")),
+            },
+            // Case normalization (English)
+            TestCase {
+                category: "mixed case English patterns",
+                input: "ALICE PREFERS VIM",
+                expected: Some(("alice", "prefers", "vim")),
+            },
+            TestCase {
+                category: "capitalized multi-word predicate",
+                input: "Bob Works At Microsoft.",
+                expected: Some(("bob", "works_at", "microsoft")),
+            },
+            // Unicode / Non-ASCII names
+            TestCase {
+                category: "non-ASCII German umlaut in subject and object",
+                input: "Jürgen likes München",
+                expected: Some(("jürgen", "likes", "münchen")),
+            },
+            TestCase {
+                category: "non-ASCII accented Latin name in English pattern",
+                input: "Renée lives in Paris",
+                expected: Some(("renée", "lives_in", "paris")),
+            },
+            TestCase {
+                category: "CJK mixed with English subject/object",
+                input: "Bob 住在 上海",
+                expected: Some(("Bob", "住在", "上海")),
+            },
+            // Unsupported patterns (negative examples)
+            TestCase {
+                category: "unsupported predicate",
+                input: "Alice visited Paris yesterday",
+                expected: None,
+            },
+            TestCase {
+                category: "passive voice (unsupported by rule patterns)",
+                input: "Rust is liked by Alice",
+                expected: None,
+            },
+            TestCase {
+                category: "identical subject and object (filtered out)",
+                input: "Alice likes Alice",
+                expected: None,
+            },
+            TestCase {
+                category: "empty object after trailing stop words",
+                input: "Alice likes to and",
+                expected: None,
+            },
+        ];
+
+        let extractor = RuleExtractor::new();
+        for tc in cases {
+            let triples = extractor.extract(tc.input);
+            match tc.expected {
+                Some((s, p, o)) => {
+                    assert_eq!(
+                        triples.len(),
+                        1,
+                        "Expected 1 triple for [{}]: input='{}', got {:?}",
+                        tc.category,
+                        tc.input,
+                        triples
+                    );
+                    assert_eq!(triples[0].subject, s, "subject mismatch for [{}]", tc.category);
+                    assert_eq!(triples[0].predicate, p, "predicate mismatch for [{}]", tc.category);
+                    assert_eq!(triples[0].object, o, "object mismatch for [{}]", tc.category);
+                }
+                None => {
+                    assert!(
+                        triples.is_empty(),
+                        "Expected empty triples for [{}]: input='{}', got {:?}",
+                        tc.category,
+                        tc.input,
+                        triples
+                    );
+                }
+            }
+        }
+    }
 }

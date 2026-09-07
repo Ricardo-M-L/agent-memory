@@ -94,7 +94,7 @@ agent-memory help
 - 关系重新激活会复用三元组记录，不是完整事件日志或任意历史时刻回放。
 - 两个后端的图算法都在 Rust 侧加载边后计算；暂无大图性能保证、分页或原生 Cypher 遍历。
 - 不自动迁移旧 SQLite 图谱，CLI 暂不选择 Neo4j；没有现成 MCP 服务或 Python/TypeScript SDK。
-- 默认特征哈希 / 规则抽取不等于模型理解；启用外部模型时数据会按配置发送。
+- 默认特征哈希 / 规则抽取不等于模型理解（详见[规则抽取行为与示例矩阵](docs/guide.md#rule-extraction-behavior-matrix)）；启用外部模型时数据会按配置发送。
 
 ## 开发与参与
 
