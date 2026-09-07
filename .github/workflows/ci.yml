@@ -35,6 +35,14 @@ jobs:
       - name: Run tests (default features, offline core)
         run: cargo test
 
+      - name: Run documented offline examples
+        run: |
+          cargo run --example quickstart
+          cargo run --example fact_history
+
+      - name: Verify source package
+        run: cargo package
+
       - name: Build docs
         env:
           RUSTDOCFLAGS: "-D warnings"

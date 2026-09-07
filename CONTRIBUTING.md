@@ -1,4 +1,36 @@
-# 贡献指南（Contributing）
+# Contributing / 贡献指南
+
+## English
+
+Small, reproducible improvements are welcome. You do not need a running model or Neo4j server
+for default development. Install Rust stable and a C/C++ compiler for bundled SQLite; the first
+build downloads dependencies, while the default runtime works offline.
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+cargo run --example quickstart
+cargo run --example fact_history
+cargo doc --all-features --no-deps
+```
+
+Keep one concern per PR, include a regression test, and describe expected/actual behavior with
+synthetic data. For Neo4j changes, run the [live contract tests](docs/neo4j.en.md#tests), or
+state that the server was unavailable. Ordinary tests explicitly ignore those live tests.
+
+Start with [help-wanted issues](https://github.com/Ricardo-M-L/agent-memory/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22help%20wanted%22).
+Each task should state scope, difficulty and acceptance criteria. Discuss broad API changes
+first. Contributions use the project's MIT license; no additional contributor agreement is
+required. English or Simplified Chinese issues/PRs are welcome. Keep both homepage languages
+consistent when changing user-facing behavior. Generated contributions must still be understood,
+reviewed and tested by their submitter; never claim a test passed if it was not run.
+
+Design constraints: keep network access and external services opt-in; do not claim scope keys
+provide graph isolation or authorization; preserve explicit single-value vs multi-value graph
+operations; document partial failures. Never attach tokens, private memories or database dumps.
+
+## 简体中文
 
 感谢你对 `agent-memory` 感兴趣！这是一个离线优先的 Rust Agent 记忆库，欢迎提 issue、
 修 bug、加特性、改进文档。
@@ -68,7 +100,7 @@ PR 必须在**最新 stable** 上同时满足：
 
 - 面向 trait 设计，新增后端优先实现既有 trait，而不是改门面签名。
 - 错误统一走 `StoreError`，不要 `unwrap`/`panic` 出现在公共 API 路径上。
-- 注释与文档使用简体中文，标识符使用英文。
+- 欢迎英文或简体中文注释与文档，标识符使用英文；用户可见行为变更需保持两份首页一致。
 
 ## 提交与 PR
 

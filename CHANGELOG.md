@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-08
+
+### 上手与文档
+- 中英文首页、完整可运行的最小 Rust 接入示例，以及三个独立进程验证持久化的事实更新演示。
+- CI 执行首页示例并验证 Cargo 源码包，移除尚未发布的 registry 徽章与不可用安装指引。
+- 明确特征哈希、图谱作用域、显式关系更新、部分失败、历史保留与图规模边界。
+- 增加英文 Neo4j / API 指南、贡献入口、路线图和问题模板。
+
 ### 图谱后端
 - 新增 `neo4j` feature：实现可选 `Neo4jGraphStore`，通过 Neo4j HTTP Query API
   提供完整 `GraphStore` 实现（add/replace/list/邻居/路径/社区/合并/统计），用于替换默认
@@ -18,7 +26,7 @@
 - `replace_triple` 可恢复已失效的同一事实；重复有效事实保留 ID 与来源，修复实体计数翻倍。
 - 两个后端统一拒绝空三元组和非有限/越界置信度，重复有效事实可提升置信度。
 
-## [0.1.0] - 2026-09-03
+## 0.1.0 source baseline (no GitHub Release) - 2026-09-03
 
 首个开源版本：离线优先、零外部服务、零 API key 即可运行的 LLM Agent 记忆层。
 
@@ -60,4 +68,4 @@
 - GitHub Actions CI：fmt 检查、clippy `-D warnings`（含 `--all-features`）、全量测试、docs 构建。
 - MIT 协议、中文 README、贡献指南。
 
-[0.1.0]: https://github.com/Ricardo-M-L/agent-memory/releases/tag/v0.1.0
+[0.1.1]: https://github.com/Ricardo-M-L/agent-memory/releases/tag/v0.1.1

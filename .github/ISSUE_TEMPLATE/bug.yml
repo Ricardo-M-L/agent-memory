@@ -1,0 +1,26 @@
+name: Bug report / 问题报告
+description: A reproducible problem with memory, graphs or the CLI.
+body:
+  - type: markdown
+    attributes:
+      value: Please omit credentials, personal data and private database contents. 请勿上传密钥或真实用户记忆。
+  - type: input
+    id: environment
+    attributes:
+      label: Version and environment / 版本与环境
+      description: Commit or version, rustc -V, OS, enabled features; Neo4j version if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction / 最小复现
+      description: Include commands or a small Rust example using synthetic data.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual behavior / 预期与实际行为
+    validations:
+      required: true

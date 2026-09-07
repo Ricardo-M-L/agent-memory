@@ -1,0 +1,25 @@
+name: Integration feedback / 接入反馈
+description: Tell us what you tried, what worked and what blocked you.
+body:
+  - type: textarea
+    id: usecase
+    attributes:
+      label: What are you building? / 使用场景
+      description: Share only public information. A public example link is optional.
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend / 后端
+      options:
+        - SQLite (default)
+        - Neo4j (optional)
+        - Custom / 自定义
+  - type: textarea
+    id: feedback
+    attributes:
+      label: What worked or blocked you? / 结果或阻碍
+      description: Include the commands tried and version. Do not include tokens or private memories.
+    validations:
+      required: true

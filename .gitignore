@@ -4,3 +4,8 @@ Cargo.lock
 *.db-wal
 *.db-shm
 .DS_Store
+**/node_modules/
+**/.hyperframes/
+**/.media/
+videos/**/out/
+videos/**/*.mp4
