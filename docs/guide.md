@@ -54,7 +54,26 @@ until you attach one with `with_graph`.
 `AgentMemory::open` does not enable an extractor. Opt in using
 `with_extractor(Arc::new(RuleExtractor::new()))`, or supply `LlmExtractor` with your `ChatClient`.
 The built-in rules cover a small set of explicit Chinese/English sentence patterns; English
-rule extraction lowercases names. This is not general named-entity recognition.
+rule extraction lowercases names. This is intentionally limited pattern matching, not general named-entity
+recognition (NER) or model-level semantic understanding.
+
+### Rule extraction behavior matrix
+
+| Category | Input Example | Extracted Triple `(s, p, o)` | Notes |
+| --- | --- | --- | --- |
+| Whitespace | `   Alice lives in Beijing   ` | `("alice", "lives_in", "beijing")` | Leading & trailing whitespace trimmed |
+| Final punctuation | `Alice lives in Beijing.` | `("alice", "lives_in", "beijing")` | Sentence delimiters stripped |
+| Repeated punctuation | `Alice likes Rust!!!???` | `("alice", "likes", "rust")` | Non-alphanumeric trail trimmed |
+| Chinese punctuation | `  张三喜欢喝乌龙茶！！！  ` | `("张三", "喜欢", "乌龙茶")` | Chinese lead word `喝` stripped |
+| Mixed English case | `ALICE PREFERS VIM` | `("alice", "prefers", "vim")` | English input lowercased |
+| Multi-word predicate | `Bob Works At Microsoft.` | `("bob", "works_at", "microsoft")` | Matched case-insensitively |
+| Unicode / Umlaut | `Jürgen likes München` | `("jürgen", "likes", "münchen")` | Unicode letters preserved & lowercased |
+| Accented Latin | `Renée lives in Paris` | `("renée", "lives_in", "paris")` | Accent preserved & lowercased |
+| Mixed CJK & Latin | `Bob 住在 上海` | `("Bob", "住在", "上海")` | Treated as CJK; preserves original casing |
+| **Unsupported**: Unmodeled verb | `Alice visited Paris yesterday` | None | Only predefined triggers matched |
+| **Unsupported**: Passive voice | `Rust is liked by Alice` | None | Passive construction unmodeled |
+| **Unsupported**: Self-referential | `Alice likes Alice` | None | `subject == object` filtered out |
+| **Unsupported**: Stop word only | `Alice likes to and` | None | Object reduces to empty |
 
 Extracted triples carry `source_memory_id` and are added with `GraphStore::add_triple`, allowing
 multiple objects. Neither the extractor nor `remember_fact` chooses which previous fact to
